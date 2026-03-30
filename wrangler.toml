@@ -35,10 +35,9 @@ VOLUME_SPIKE_MULTIPLIER = "1.5"
 CRYPTO_WATCHLIST = "bitcoin,ethereum,solana,cardano,polkadot"
 
 # ─── KV Namespaces ───────────────────────────────────────────
-# Create with: wrangler kv namespace create YMSA_CACHE
-# [[kv_namespaces]]
-# binding = "YMSA_CACHE"
-# id = "<YOUR_KV_NAMESPACE_ID>"
+[[kv_namespaces]]
+binding = "YMSA_CACHE"
+id = "a110e14c46e440dcad5a9f46a32e85b9"
 
 # ─── R2 Bucket ───────────────────────────────────────────────
 # Create with: wrangler r2 bucket create ymsa-data
@@ -57,11 +56,10 @@ CRYPTO_WATCHLIST = "bitcoin,ethereum,solana,cardano,polkadot"
 # new_sqlite_classes = ["OrchestratorDO", "PortfolioDO"]
 
 # ─── D1 Database ─────────────────────────────────────────────
-# Create with: wrangler d1 create ymsa-db
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "ymsa-db"
-# database_id = "<YOUR_D1_DATABASE_ID>"
+[[d1_databases]]
+binding = "DB"
+database_name = "ymsa-db"
+database_id = "fbc9947c-7654-43d2-9cc9-e949baa60d05"
 
 # ─── Secrets (set via CLI, never in this file) ───────────────
 # wrangler secret put ALPHA_VANTAGE_API_KEY

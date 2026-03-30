@@ -2,7 +2,7 @@
 // Cloudflare Worker: 5-agent signal system → Telegram
 // Signal-only: no execution, manual trading
 
-import type { Env } from './types';
+import type { Env, TechnicalIndicator } from './types';
 import { handleCronEvent } from './cron-handler';
 import { sendTelegramMessage } from './alert-router';
 import * as yahooFinance from './api/yahoo-finance';
@@ -109,16 +109,28 @@ export default {
       // ─── Watchlist Scan ────────────────────────────
       if (path === '/api/scan') {
         const watchlist = env.DEFAULT_WATCHLIST.split(',').map((s) => s.trim());
-        const results = [];
-        for (const symbol of watchlist) {
-          const quote = await yahooFinance.getQuote(symbol);
-          if (!quote) continue;
-          const indicators = await taapi.getBulkIndicators(symbol, env);
-          const signals = detectSignals(quote, indicators, null, env);
-          const score = calculateSignalScore(signals);
-          results.push({ symbol, price: quote.price, changePercent: quote.changePercent, signalCount: signals.length, score, topSignals: signals.slice(0, 3).map((s) => s.title) });
-        }
-        results.sort((a, b) => b.score - a.score);
+        const useTaapi = url.searchParams.get('indicators') !== 'false';
+        const scanOne = async (symbol: string) => {
+          try {
+            const quote = await yahooFinance.getQuote(symbol);
+            if (!quote) return null;
+            let indicators: TechnicalIndicator[] = [];
+            if (useTaapi) {
+              try {
+                const result = await Promise.race([
+                  taapi.getBulkIndicators(symbol, env),
+                  new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+                ]);
+                if (result) indicators = result;
+              } catch {}
+            }
+            const signals = detectSignals(quote, indicators, null, env);
+            const score = calculateSignalScore(signals);
+            return { symbol, price: quote.price, changePercent: quote.changePercent, signalCount: signals.length, score, topSignals: signals.slice(0, 3).map((s) => s.title) };
+          } catch { return null; }
+        };
+        const settled = await Promise.all(watchlist.map(scanOne));
+        const results = settled.filter(Boolean).sort((a, b) => b!.score - a!.score);
         return jsonResponse({ watchlist: results, timestamp: new Date().toISOString() });
       }
 
