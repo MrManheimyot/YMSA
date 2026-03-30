@@ -11,12 +11,17 @@ account_id = "25d6c25b2232bbe0a5ae57c6fde9921c"
 [triggers]
 crons = [
   "0 5 * * 1-5",          # 07:00 IST — Morning pre-market briefing
-  "30 14 * * 1-5",        # US Market Open — Full scan
+  "30 14 * * 1-5",        # US Market Open — Full scan + regime detection
+  "45 14 * * 1-5",        # 15min after open — Opening Range Break scan
+  "*/5 14-21 * * 1-5",    # Every 5min during US market hours (quick pulse)
   "*/15 14-21 * * 1-5",   # Every 15min during US market hours (RSI/MACD)
   "0 15-21 * * 1-5",      # Every hour during market — EMA/Fib/Screener
+  "0 18 * * 1-5",         # 20:00 IST  — Midday rebalance check
   "0 15 * * 1-5",         # 17:00 IST — Evening post-market summary
-  "0 18 * * 1-5",         # 20:00 IST — After-hours earnings scan
+  "30 21 * * 1-5",        # 23:30 IST — After-hours/overnight setup
   "0 7 * * SUN",          # Sunday 09:00 IST — Weekly portfolio review
+  "0 3 * * SAT",          # Saturday 05:00 IST — ML retrain + pairs recalibrate
+  "0 0 1 * *",            # 1st of month 02:00 IST — Monthly performance report
 ]
 
 # ─── Environment Variables (non-secret) ──────────────────────
@@ -24,6 +29,11 @@ crons = [
 ENVIRONMENT = "production"
 TIMEZONE = "Asia/Jerusalem"
 DEFAULT_WATCHLIST = "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,CRM"
+TIER1_WATCHLIST = "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,CRM,JPM,GS,V,INTC,QCOM"
+TIER2_WATCHLIST = "UNH,JNJ,PFE,XOM,CVX,COP,NKE,SBUX,MCD,CAT,BA,HON,NOW,SNOW,PANW"
+ETF_WATCHLIST = "SPY,QQQ,IWM,XLF,XLK,XLE,GLD,TLT"
+EXPANDED_CRYPTO_WATCHLIST = "bitcoin,ethereum,solana,cardano,polkadot,avalanche-2,chainlink,uniswap,aave,arbitrum"
+ALPACA_PAPER_MODE = "true"
 RSI_OVERBOUGHT = "70"
 RSI_OVERSOLD = "30"
 EMA_FAST = "50"
@@ -68,6 +78,9 @@ database_id = "fbc9947c-7654-43d2-9cc9-e949baa60d05"
 # wrangler secret put FRED_API_KEY
 # wrangler secret put TELEGRAM_BOT_TOKEN
 # wrangler secret put TELEGRAM_CHAT_ID
+# wrangler secret put ALPACA_API_KEY
+# wrangler secret put ALPACA_SECRET_KEY
+# wrangler secret put YMSA_API_KEY
 
 # ─── Browser Rendering (Playwright for Finviz/Google scraping)
 [browser]

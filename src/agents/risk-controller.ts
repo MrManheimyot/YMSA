@@ -214,3 +214,124 @@ function getOrderSector(order: ProposedOrder): string {
 
   return 'Other';
 }
+
+// ═══════════════════════════════════════════════════════════════
+// v3: ENGINE-LEVEL RISK MANAGEMENT
+// Per-engine budgets, VIX-based adjustments, tiered kill switch
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Engine-level capital budgets (% of total equity)
+ */
+export const ENGINE_BUDGETS: Record<string, number> = {
+  MTF_MOMENTUM: 0.30,
+  SMART_MONEY: 0.20,
+  STAT_ARB: 0.20,
+  OPTIONS: 0.10,
+  CRYPTO_DEFI: 0.10,
+  EVENT_DRIVEN: 0.10,
+};
+
+/**
+ * Tiered kill switch thresholds
+ * -3% → reduce all positions 50%
+ * -5% → close all positions
+ * -10% → halt trading for 7 days
+ */
+export interface TieredKillSwitch {
+  level: 'NONE' | 'REDUCE' | 'CLOSE_ALL' | 'HALT';
+  action: string;
+  threshold: number;
+}
+
+export function evaluateKillSwitch(dailyPnlPct: number): TieredKillSwitch {
+  if (dailyPnlPct <= -10) {
+    return { level: 'HALT', action: 'HALT all trading for 7 days', threshold: -10 };
+  }
+  if (dailyPnlPct <= -5) {
+    return { level: 'CLOSE_ALL', action: 'CLOSE all open positions immediately', threshold: -5 };
+  }
+  if (dailyPnlPct <= -3) {
+    return { level: 'REDUCE', action: 'REDUCE all positions by 50%', threshold: -3 };
+  }
+  return { level: 'NONE', action: 'Normal operations', threshold: 0 };
+}
+
+/**
+ * Check if an engine has exceeded its capital budget.
+ */
+export function checkEngineBudget(
+  engineId: string,
+  engineExposure: number,
+  totalEquity: number
+): { approved: boolean; message: string } {
+  const budget = ENGINE_BUDGETS[engineId] || 0.10;
+  const maxExposure = totalEquity * budget;
+  if (engineExposure > maxExposure) {
+    return {
+      approved: false,
+      message: `Engine ${engineId} exposure $${engineExposure.toFixed(0)} exceeds budget $${maxExposure.toFixed(0)} (${(budget * 100).toFixed(0)}%)`,
+    };
+  }
+  return { approved: true, message: 'Within budget' };
+}
+
+/**
+ * VIX-based risk adjustment: when VIX > 25, tighten stops and reduce position sizes.
+ */
+export function vixRiskAdjustment(vixLevel: number): {
+  positionSizeMultiplier: number;
+  stopMultiplier: number;
+  maxExposurePct: number;
+} {
+  if (vixLevel >= 35) {
+    return { positionSizeMultiplier: 0.25, stopMultiplier: 0.5, maxExposurePct: 30 };
+  }
+  if (vixLevel >= 25) {
+    return { positionSizeMultiplier: 0.50, stopMultiplier: 0.75, maxExposurePct: 50 };
+  }
+  if (vixLevel >= 18) {
+    return { positionSizeMultiplier: 0.75, stopMultiplier: 0.9, maxExposurePct: 70 };
+  }
+  return { positionSizeMultiplier: 1.0, stopMultiplier: 1.0, maxExposurePct: 80 };
+}
+
+/**
+ * Correlation guard: block new positions that would create > 0.85 correlation
+ * within the same engine or across engines.
+ */
+export function correlationCheck(
+  newSymbol: string,
+  existingSymbols: string[],
+  correlationMatrix: Record<string, Record<string, number>>
+): { approved: boolean; violations: string[] } {
+  const violations: string[] = [];
+  for (const existing of existingSymbols) {
+    const corr = correlationMatrix[newSymbol]?.[existing]
+      ?? correlationMatrix[existing]?.[newSymbol]
+      ?? 0;
+    if (Math.abs(corr) > 0.85) {
+      violations.push(`${newSymbol} ↔ ${existing}: correlation ${corr.toFixed(2)} exceeds 0.85`);
+    }
+  }
+  return { approved: violations.length === 0, violations };
+}
+
+/**
+ * Format v3 risk event for Telegram
+ */
+export function formatRiskEvent(
+  eventType: string,
+  severity: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
+  description: string,
+  action: string
+): string {
+  const emoji = severity === 'CRITICAL' ? '🚨' : severity === 'HIGH' ? '⚠️' : severity === 'MEDIUM' ? '🟡' : 'ℹ️';
+  return [
+    `${emoji} <b>Risk Event — ${severity}</b>`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `Type: ${eventType}`,
+    `${description}`,
+    `Action: ${action}`,
+  ].join('\n');
+}

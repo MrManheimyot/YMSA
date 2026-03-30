@@ -14,11 +14,20 @@ export interface Env {
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
 
+  // v3: Broker API Keys
+  ALPACA_API_KEY?: string;
+  ALPACA_SECRET_KEY?: string;
+
   // Environment variables (from wrangler.toml)
   ENVIRONMENT: string;
   TIMEZONE: string;
   DEFAULT_WATCHLIST: string;
   CRYPTO_WATCHLIST: string;
+  TIER1_WATCHLIST: string;
+  TIER2_WATCHLIST: string;
+  ETF_WATCHLIST: string;
+  EXPANDED_CRYPTO_WATCHLIST: string;
+  ALPACA_PAPER_MODE: string;
   RSI_OVERBOUGHT: string;
   RSI_OVERSOLD: string;
   EMA_FAST: string;
@@ -32,7 +41,7 @@ export interface Env {
   BROWSER: any;              // Browser Rendering (Playwright)
   YMSA_CACHE?: KVNamespace;  // KV cache
   YMSA_DATA?: R2Bucket;      // R2 storage
-  DB?: D1Database;           // D1 database
+  DB: D1Database;            // D1 database (always bound)
   ORCHESTRATOR?: DurableObjectNamespace;  // Durable Object
   PORTFOLIO?: DurableObjectNamespace;     // Durable Object
 }
@@ -74,7 +83,10 @@ export interface TechnicalIndicator {
 
 export type IndicatorType =
   | 'RSI'
+  | 'EMA_9'
+  | 'EMA_21'
   | 'EMA_50'
+  | 'EMA_55'
   | 'EMA_200'
   | 'SMA_20'
   | 'MACD'
@@ -84,7 +96,21 @@ export type IndicatorType =
   | 'BOLLINGER_LOWER'
   | 'BOLLINGER_MIDDLE'
   | 'VOLUME_SMA_20'
-  | 'ATR';
+  | 'ATR'
+  | 'ADX'
+  | 'STOCH_RSI'
+  | 'STOCH_K'
+  | 'STOCH_D'
+  | 'OBV'
+  | 'VWAP'
+  | 'SUPERTREND'
+  | 'WILLIAMS_R'
+  | 'CCI'
+  | 'PSAR'
+  | 'ICHIMOKU_CONVERSION'
+  | 'ICHIMOKU_BASE'
+  | 'ICHIMOKU_SPAN_A'
+  | 'ICHIMOKU_SPAN_B';
 
 export type Timeframe = '1min' | '5min' | '15min' | '1h' | '4h' | 'daily' | 'weekly' | 'monthly';
 export type DataSource = 'alpha_vantage' | 'finnhub' | 'taapi' | 'yahoo_finance' | 'finviz' | 'coingecko' | 'dexscreener';
@@ -153,7 +179,35 @@ export type SignalType =
   | '52W_BREAKDOWN'
   | 'FIBONACCI_LEVEL_HIT'
   | 'VOLUME_SPIKE'
-  | 'PRICE_ALERT';
+  | 'PRICE_ALERT'
+  // v3: Multi-timeframe signals
+  | 'MTF_CONFLUENCE_BUY'
+  | 'MTF_CONFLUENCE_SELL'
+  | 'MTF_MEAN_REVERSION'
+  // v3: Smart Money signals
+  | 'ORDER_BLOCK_BUY'
+  | 'ORDER_BLOCK_SELL'
+  | 'FAIR_VALUE_GAP'
+  | 'LIQUIDITY_SWEEP'
+  | 'BREAK_OF_STRUCTURE'
+  | 'INSIDER_BUY'
+  // v3: Pairs / Stat-Arb signals
+  | 'PAIR_LONG_SPREAD'
+  | 'PAIR_SHORT_SPREAD'
+  | 'PAIR_CLOSE'
+  // v3: Options signals
+  | 'SELL_PUT'
+  | 'SELL_CALL'
+  | 'IRON_CONDOR'
+  // v3: Crypto signals
+  | 'FUNDING_RATE_ARB'
+  | 'WHALE_ACCUMULATION'
+  | 'DEX_NEW_PAIR'
+  // v3: Event-driven signals
+  | 'EARNINGS_PLAY'
+  | 'MACRO_EVENT'
+  | 'REGIME_CHANGE'
+  | 'NEWS_CATALYST';
 
 export type AlertPriority = 'CRITICAL' | 'IMPORTANT' | 'INFO';
 
@@ -181,7 +235,16 @@ export type CronJobType =
   | 'FULL_SCAN_HOURLY'
   | 'EVENING_SUMMARY'
   | 'AFTER_HOURS_SCAN'
-  | 'WEEKLY_REVIEW';
+  | 'WEEKLY_REVIEW'
+  // v3: New job types
+  | 'PRE_MARKET_SETUP'
+  | 'OPENING_RANGE_BREAK'
+  | 'QUICK_PULSE_5MIN'
+  | 'MIDDAY_REBALANCE'
+  | 'OVERNIGHT_SETUP'
+  | 'ML_RETRAIN'
+  | 'PAIRS_RECALIBRATE'
+  | 'MONTHLY_PERFORMANCE';
 
 /**
  * OHLCV candle data for Fibonacci calculation

@@ -12,6 +12,22 @@ export type AgentId =
   | 'POLYMARKET'         // Agent 4: Prediction / event markets
   | 'COMMODITIES';       // Agent 5: Commodities + macro
 
+/**
+ * v3: Engine identifiers for the 6-engine system
+ */
+export type EngineId =
+  | 'MTF_MOMENTUM'      // Engine 1: Multi-Timeframe Momentum & Mean Reversion
+  | 'SMART_MONEY'       // Engine 2: Smart Money + Institutional Flow
+  | 'STAT_ARB'          // Engine 3: Statistical Arbitrage + Pairs
+  | 'OPTIONS'           // Engine 4: Options Income (Premium Selling)
+  | 'CRYPTO_DEFI'       // Engine 5: Crypto Swing + DeFi Yield
+  | 'EVENT_DRIVEN';     // Engine 6: Event-Driven + Prediction Markets
+
+/**
+ * v3: Market regime for strategy adaptation
+ */
+export type RegimeType = 'TRENDING_UP' | 'TRENDING_DOWN' | 'RANGING' | 'VOLATILE';
+
 export type Arena = 'stocks' | 'crypto' | 'prediction_markets' | 'commodities';
 
 // ─── Agent Signal (Output of each agent) ─────────────────────

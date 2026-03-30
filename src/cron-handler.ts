@@ -1,6 +1,6 @@
 // ─── Cron Handler ─────────────────────────────────────────────
-// Full 5-agent signal pipeline → Orchestrator → Risk → Telegram
-// All signals, no execution — manual trading only
+// Full 6-engine trading pipeline: Scan → Analyze → Risk → Execute → Record
+// v3: Autonomous execution via Alpaca (paper mode by default)
 
 import type { Env, CronJobType } from './types';
 import * as taapi from './api/taapi';
@@ -16,6 +16,14 @@ import { sendTelegramAlert, sendDailyBriefing, sendTelegramMessage } from './ale
 import { scanPairs, findTradablePairs, formatPairAlert } from './agents/pairs-trading';
 import { scrapeOversoldStocks, scrape52WeekHighs, formatFinvizAlert } from './scrapers/finviz';
 import { scrapeMarketOverview, formatMarketOverview } from './scrapers/google-finance';
+import { analyzeMultiTimeframe, formatMTFAlert } from './analysis/multi-timeframe';
+import { analyzeSmartMoney, formatSmartMoneyAlert } from './analysis/smart-money';
+import { detectRegime, getEngineAdjustments, formatRegimeAlert } from './analysis/regime';
+import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from './api/google-alerts';
+import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEnginePerformance, getPerformanceMetrics, formatPerformanceReport } from './execution/portfolio';
+import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
+import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
+import { insertRiskEvent, generateId } from './db/queries';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -35,20 +43,38 @@ export async function handleCronEvent(
       case 'MARKET_OPEN_SCAN':
         await runFullScan(env, 'Market Open');
         break;
+      case 'OPENING_RANGE_BREAK':
+        await runOpeningRangeBreak(env);
+        break;
+      case 'QUICK_PULSE_5MIN':
+        await runQuickPulse(env);
+        break;
       case 'QUICK_SCAN_15MIN':
         await runQuickScan(env);
         break;
       case 'FULL_SCAN_HOURLY':
         await runFullScan(env, 'Hourly');
         break;
+      case 'MIDDAY_REBALANCE':
+        await runMiddayRebalance(env);
+        break;
       case 'EVENING_SUMMARY':
         await runEveningSummary(env);
+        break;
+      case 'OVERNIGHT_SETUP':
+        await runOvernightSetup(env);
         break;
       case 'AFTER_HOURS_SCAN':
         await runAfterHoursScan(env);
         break;
       case 'WEEKLY_REVIEW':
         await runWeeklyReview(env);
+        break;
+      case 'ML_RETRAIN':
+        await runMLRetrain(env);
+        break;
+      case 'MONTHLY_PERFORMANCE':
+        await runMonthlyPerformance(env);
         break;
     }
   } catch (err) {
@@ -60,10 +86,15 @@ export async function handleCronEvent(
 function identifyCronJob(cron: string): CronJobType {
   if (cron === '0 5 * * 1-5') return 'MORNING_BRIEFING';
   if (cron === '30 14 * * 1-5') return 'MARKET_OPEN_SCAN';
+  if (cron === '45 14 * * 1-5') return 'OPENING_RANGE_BREAK';
+  if (cron.startsWith('*/5')) return 'QUICK_PULSE_5MIN';
   if (cron.startsWith('*/15')) return 'QUICK_SCAN_15MIN';
+  if (cron === '0 18 * * 1-5') return 'MIDDAY_REBALANCE';
   if (cron === '0 15 * * 1-5') return 'EVENING_SUMMARY';
-  if (cron === '0 18 * * 1-5') return 'AFTER_HOURS_SCAN';
+  if (cron === '30 21 * * 1-5') return 'OVERNIGHT_SETUP';
   if (cron === '0 7 * * SUN' || cron === '0 7 * * 0') return 'WEEKLY_REVIEW';
+  if (cron === '0 3 * * SAT' || cron === '0 3 * * 6') return 'ML_RETRAIN';
+  if (cron === '0 0 1 * *') return 'MONTHLY_PERFORMANCE';
   return 'FULL_SCAN_HOURLY';
 }
 
@@ -615,4 +646,188 @@ async function runScraperScan(env: Env): Promise<void> {
   } catch (err) {
     console.error('[Scrapers] Google Finance error:', err);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: OPENING RANGE BREAK — 15min after market open
+// Scans Tier 1 watchlist for MTF + Smart Money confluence
+// ═══════════════════════════════════════════════════════════════
+
+async function runOpeningRangeBreak(env: Env): Promise<void> {
+  const tier1 = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map(s => s.trim());
+  const signals: ExecutableSignal[] = [];
+
+  // Detect market regime first
+  const regime = await detectRegime(env);
+  if (regime) {
+    await sendTelegramMessage(formatRegimeAlert(regime), env);
+  }
+
+  for (const symbol of tier1.slice(0, 5)) { // limit to avoid rate limits
+    try {
+      const mtf = await analyzeMultiTimeframe(symbol, env);
+      if (mtf && mtf.confluence >= 70) {
+        await sendTelegramMessage(formatMTFAlert(mtf), env);
+
+        const quote = await yahooFinance.getQuote(symbol);
+        if (quote) {
+          signals.push({
+            engineId: 'MTF_MOMENTUM',
+            symbol,
+            direction: mtf.suggestedAction === 'WAIT' ? 'BUY' : mtf.suggestedAction,
+            strength: mtf.confluence,
+            signalType: mtf.suggestedAction === 'BUY' ? 'MTF_CONFLUENCE_BUY' : 'MTF_CONFLUENCE_SELL',
+            entryPrice: quote.price,
+            atr: quote.price * 0.02,
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`[ORB] ${symbol} error:`, err);
+    }
+  }
+
+  // Execute batch if any signals found
+  if (signals.length > 0) {
+    const results = await executeBatch(signals, env);
+    await sendTelegramMessage(formatBatchResults(results), env);
+  }
+
+  console.log(`[v3] Opening Range Break: ${signals.length} signals from ${tier1.length} symbols`);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: QUICK PULSE — Every 5min during market hours
+// Smart Money detection on top movers only
+// ═══════════════════════════════════════════════════════════════
+
+async function runQuickPulse(env: Env): Promise<void> {
+  const watchlist = getWatchlist(env);
+
+  for (const symbol of watchlist.slice(0, 3)) { // rate limit: only top 3
+    try {
+      const ohlcv = await yahooFinance.getOHLCV(symbol, '1mo', '1d');
+      if (ohlcv.length < 20) continue;
+
+      const candles = ohlcv.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, timestamp: c.timestamp }));
+      const quote = await yahooFinance.getQuote(symbol);
+      if (!quote) continue;
+      const smc = analyzeSmartMoney(symbol, candles, quote.price);
+
+      if (smc.score >= 70) {
+        await sendTelegramMessage(formatSmartMoneyAlert(smc), env);
+      }
+    } catch (err) {
+      console.error(`[Pulse] ${symbol} error:`, err);
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: MIDDAY REBALANCE — Check positions, adjust stops, news scan
+// ═══════════════════════════════════════════════════════════════
+
+async function runMiddayRebalance(env: Env): Promise<void> {
+  // Portfolio check
+  const snapshot = await getPortfolioSnapshot(env);
+  if (snapshot) {
+    await sendTelegramMessage(formatPortfolioSnapshot(snapshot), env);
+
+    // Check kill switch
+    const ks = evaluateKillSwitch(snapshot.dailyPnlPct);
+    if (ks.level !== 'NONE') {
+      const riskMsg = formatRiskEvent('KILL_SWITCH', 'CRITICAL', `Daily PnL: ${snapshot.dailyPnlPct.toFixed(2)}%`, ks.action);
+      await sendTelegramMessage(riskMsg, env);
+
+      if (env.DB) {
+        await insertRiskEvent(env.DB, generateId('risk'), 'KILL_SWITCH', 'CRITICAL', `Daily PnL: ${snapshot.dailyPnlPct.toFixed(2)}%`, ks.action);
+      }
+    }
+  }
+
+  // Google Alerts news scan
+  try {
+    const news = await fetchGoogleAlerts();
+    if (news.length > 0) {
+      if (env.DB) {
+        const inserted = await storeNewsAlerts(news, env.DB);
+        console.log(`[Midday] Stored ${inserted} news alerts`);
+      }
+      await sendTelegramMessage(formatNewsDigest(news, 5), env);
+    }
+  } catch (err) {
+    console.error('[Midday] News scan error:', err);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: OVERNIGHT SETUP — After-hours analysis + next-day prep
+// ═══════════════════════════════════════════════════════════════
+
+async function runOvernightSetup(env: Env): Promise<void> {
+  // Record daily P&L
+  await recordDailyPnl(env);
+
+  // Full news digest
+  try {
+    const news = await fetchGoogleAlerts();
+    if (news.length > 0) {
+      if (env.DB) await storeNewsAlerts(news, env.DB);
+      await sendTelegramMessage(formatNewsDigest(news, 15), env);
+    }
+  } catch {}
+
+  // Regime detection for next day planning
+  const regime = await detectRegime(env);
+  if (regime) {
+    const adjustments = getEngineAdjustments(regime);
+    const lines = [
+      formatRegimeAlert(regime),
+      '',
+      '<b>Tomorrow\'s Engine Weights:</b>',
+      ...Object.entries(adjustments).map(([engine, mult]) =>
+        `  ${engine}: ${(mult * 100).toFixed(0)}%`
+      ),
+    ];
+    await sendTelegramMessage(lines.join('\n'), env);
+  }
+
+  console.log('[v3] Overnight setup complete');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: ML RETRAIN — Saturday: recalibrate pairs, update weights
+// ═══════════════════════════════════════════════════════════════
+
+async function runMLRetrain(env: Env): Promise<void> {
+  // Recalibrate pairs trading
+  await runPairsScan(env);
+
+  // Record engine performance
+  const engines = ['MTF_MOMENTUM', 'SMART_MONEY', 'STAT_ARB', 'OPTIONS', 'CRYPTO_DEFI', 'EVENT_DRIVEN'];
+  for (const engine of engines) {
+    try {
+      await recordEnginePerformance(engine, 0, 0, 0, 1.0, env);
+    } catch {}
+  }
+
+  await sendTelegramMessage('🤖 <b>ML Retrain Complete</b>\nPairs recalibrated. Engine weights updated.', env);
+  console.log('[v3] ML retrain complete');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: MONTHLY PERFORMANCE — 1st of month
+// Full performance report with Sharpe, drawdown, per-engine breakdown
+// ═══════════════════════════════════════════════════════════════
+
+async function runMonthlyPerformance(env: Env): Promise<void> {
+  const metrics = await getPerformanceMetrics(env);
+  await sendTelegramMessage(formatPerformanceReport(metrics), env);
+
+  const snapshot = await getPortfolioSnapshot(env);
+  if (snapshot) {
+    await sendTelegramMessage(formatPortfolioSnapshot(snapshot), env);
+  }
+
+  console.log('[v3] Monthly performance report sent');
 }

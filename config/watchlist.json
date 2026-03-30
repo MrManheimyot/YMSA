@@ -1,5 +1,5 @@
 {
-  "watchlist": [
+  "tier1_core": [
     { "symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology" },
     { "symbol": "MSFT", "name": "Microsoft Corp.", "sector": "Technology" },
     { "symbol": "NVDA", "name": "NVIDIA Corp.", "sector": "Technology" },
@@ -7,9 +7,54 @@
     { "symbol": "AMZN", "name": "Amazon.com Inc.", "sector": "Consumer Cyclical" },
     { "symbol": "META", "name": "Meta Platforms", "sector": "Technology" },
     { "symbol": "TSLA", "name": "Tesla Inc.", "sector": "Consumer Cyclical" },
-    { "symbol": "AMD", "name": "Advanced Micro Devices", "sector": "Technology" },
-    { "symbol": "AVGO", "name": "Broadcom Inc.", "sector": "Technology" },
-    { "symbol": "CRM", "name": "Salesforce Inc.", "sector": "Technology" }
+    { "symbol": "AMD", "name": "Advanced Micro Devices", "sector": "Semiconductors" },
+    { "symbol": "AVGO", "name": "Broadcom Inc.", "sector": "Semiconductors" },
+    { "symbol": "CRM", "name": "Salesforce Inc.", "sector": "Technology" },
+    { "symbol": "JPM", "name": "JPMorgan Chase", "sector": "Finance" },
+    { "symbol": "GS", "name": "Goldman Sachs", "sector": "Finance" },
+    { "symbol": "V", "name": "Visa Inc.", "sector": "Finance" },
+    { "symbol": "INTC", "name": "Intel Corp.", "sector": "Semiconductors" },
+    { "symbol": "QCOM", "name": "Qualcomm Inc.", "sector": "Semiconductors" }
   ],
-  "notes": "Edit this file to customize your watchlist. Changes are loaded on each cron run."
+  "tier2_rotation": [
+    { "symbol": "UNH", "name": "UnitedHealth Group", "sector": "Healthcare" },
+    { "symbol": "JNJ", "name": "Johnson & Johnson", "sector": "Healthcare" },
+    { "symbol": "PFE", "name": "Pfizer Inc.", "sector": "Healthcare" },
+    { "symbol": "XOM", "name": "Exxon Mobil", "sector": "Energy" },
+    { "symbol": "CVX", "name": "Chevron Corp.", "sector": "Energy" },
+    { "symbol": "COP", "name": "ConocoPhillips", "sector": "Energy" },
+    { "symbol": "NKE", "name": "Nike Inc.", "sector": "Consumer" },
+    { "symbol": "SBUX", "name": "Starbucks Corp.", "sector": "Consumer" },
+    { "symbol": "MCD", "name": "McDonald's Corp.", "sector": "Consumer" },
+    { "symbol": "CAT", "name": "Caterpillar Inc.", "sector": "Industrial" },
+    { "symbol": "BA", "name": "Boeing Co.", "sector": "Industrial" },
+    { "symbol": "HON", "name": "Honeywell Int'l", "sector": "Industrial" },
+    { "symbol": "NOW", "name": "ServiceNow Inc.", "sector": "SaaS" },
+    { "symbol": "SNOW", "name": "Snowflake Inc.", "sector": "SaaS" },
+    { "symbol": "PANW", "name": "Palo Alto Networks", "sector": "SaaS" }
+  ],
+  "tier3_etfs": [
+    { "symbol": "SPY", "name": "S&P 500 ETF", "sector": "Index" },
+    { "symbol": "QQQ", "name": "Nasdaq 100 ETF", "sector": "Index" },
+    { "symbol": "IWM", "name": "Russell 2000 ETF", "sector": "Index" },
+    { "symbol": "XLF", "name": "Financials SPDR", "sector": "Sector ETF" },
+    { "symbol": "XLK", "name": "Technology SPDR", "sector": "Sector ETF" },
+    { "symbol": "XLE", "name": "Energy SPDR", "sector": "Sector ETF" },
+    { "symbol": "GLD", "name": "Gold ETF", "sector": "Commodity ETF" },
+    { "symbol": "TLT", "name": "20+ Year Treasury Bond ETF", "sector": "Bond ETF" },
+    { "symbol": "VIX", "name": "CBOE Volatility Index", "sector": "Volatility" }
+  ],
+  "pairs": [
+    { "pair": ["AAPL", "MSFT"], "sector": "Technology" },
+    { "pair": ["NVDA", "AMD"], "sector": "Semiconductors" },
+    { "pair": ["XOM", "CVX"], "sector": "Energy" },
+    { "pair": ["JPM", "GS"], "sector": "Finance" },
+    { "pair": ["GOOGL", "META"], "sector": "Technology" },
+    { "pair": ["SPY", "QQQ"], "sector": "Index" }
+  ],
+  "crypto_expanded": [
+    "bitcoin", "ethereum", "solana", "cardano", "polkadot",
+    "avalanche-2", "chainlink", "uniswap", "aave", "arbitrum"
+  ],
+  "notes": "v3: 3-tier watchlist. Tier 1 = always scanned. Tier 2 = rotated based on regime. Tier 3 = ETFs for regime detection."
 }

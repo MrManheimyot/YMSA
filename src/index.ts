@@ -1,6 +1,6 @@
 // ─── YMSA Financial Automation — Main Entry Point ─────────────
-// Cloudflare Worker: 5-agent signal system → Telegram
-// Signal-only: no execution, manual trading
+// Cloudflare Worker: 6-engine trading system → Execution → Telegram
+// v3.0: Signal generation + execution via Alpaca
 
 import type { Env, TechnicalIndicator } from './types';
 import { handleCronEvent } from './cron-handler';
@@ -11,9 +11,13 @@ import * as coingecko from './api/coingecko';
 import * as dexscreener from './api/dexscreener';
 import * as polymarket from './api/polymarket';
 import * as fred from './api/fred';
+import * as alpaca from './api/alpaca';
 import { calculateFibonacci, formatFibonacciAlert } from './analysis/fibonacci';
 import { detectSignals, calculateSignalScore } from './analysis/signals';
+import { detectRegime } from './analysis/regime';
 import { renderDashboard, getSystemStatus } from './dashboard';
+import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
+import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents } from './db/queries';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -25,10 +29,10 @@ export default {
       if (path === '/' || path === '/health') {
         return jsonResponse({
           status: 'ok',
-          service: 'YMSA Multi-Agent Trading System',
-          version: '2.0.0',
-          agents: ['stocks-technical', 'stat-arb', 'crypto', 'polymarket', 'commodities'],
-          mode: 'signals-only (manual trading)',
+          service: 'YMSA Multi-Engine Trading System',
+          version: '3.0.0',
+          engines: ['MTF_MOMENTUM', 'SMART_MONEY', 'STAT_ARB', 'OPTIONS', 'CRYPTO_DEFI', 'EVENT_DRIVEN'],
+          mode: env.ALPACA_PAPER_MODE === 'false' ? 'LIVE TRADING' : 'PAPER TRADING',
           timestamp: new Date().toISOString(),
           watchlist: env.DEFAULT_WATCHLIST.split(','),
           cryptoWatchlist: (env.CRYPTO_WATCHLIST || '').split(','),
@@ -185,11 +189,16 @@ export default {
         const validJobs: Record<string, string> = {
           morning: '0 5 * * 1-5',
           open: '30 14 * * 1-5',
+          opening_range: '45 14 * * 1-5',
           quick: '*/15 14-21 * * 1-5',
+          pulse: '*/5 14-21 * * 1-5',
           hourly: '0 15-21 * * 1-5',
+          midday: '0 18 * * 1-5',
           evening: '0 15 * * 1-5',
-          afterhours: '0 18 * * 1-5',
+          overnight: '30 21 * * 1-5',
           weekly: '0 7 * * 0',
+          retrain: '0 3 * * 6',
+          monthly: '0 0 1 * *',
         };
 
         if (!job || !validJobs[job]) {
@@ -198,6 +207,69 @@ export default {
 
         ctx.waitUntil(handleCronEvent(validJobs[job], env));
         return jsonResponse({ status: `Triggered job: ${job}` });
+      }
+
+      // ═══════════════════════════════════════════════════
+      // v3: EXECUTION & PORTFOLIO ROUTES
+      // ═══════════════════════════════════════════════════
+
+      // ─── Portfolio Snapshot ─────────────────────────
+      if (path === '/api/portfolio') {
+        const snapshot = await getPortfolioSnapshot(env);
+        if (!snapshot) return jsonResponse({ error: 'Cannot connect to broker' }, 503);
+        return jsonResponse(snapshot);
+      }
+
+      // ─── Performance Metrics ───────────────────────
+      if (path === '/api/performance') {
+        const metrics = await getPerformanceMetrics(env);
+        return jsonResponse(metrics);
+      }
+
+      // ─── Alpaca Account ────────────────────────────
+      if (path === '/api/account') {
+        const account = await alpaca.getAccount(env);
+        if (!account) return jsonResponse({ error: 'Cannot connect to Alpaca' }, 503);
+        return jsonResponse(account);
+      }
+
+      // ─── Open Positions (broker) ───────────────────
+      if (path === '/api/positions') {
+        const positions = await alpaca.getPositions(env);
+        return jsonResponse({ positions, count: positions.length });
+      }
+
+      // ─── Open Trades (D1) ──────────────────────────
+      if (path === '/api/trades') {
+        const limit = parseInt(url.searchParams.get('limit') || '20', 10);
+        const open = url.searchParams.get('status') === 'open';
+        const trades = open ? await getOpenTrades(env.DB!) : await getRecentTrades(env.DB!, limit);
+        return jsonResponse({ trades, count: trades.length });
+      }
+
+      // ─── Open Positions (D1) ───────────────────────
+      if (path === '/api/d1-positions') {
+        const positions = await getOpenPositions(env.DB!);
+        return jsonResponse({ positions, count: positions.length });
+      }
+
+      // ─── Recent Signals ────────────────────────────
+      if (path === '/api/signals') {
+        const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+        const signals = await getRecentSignals(env.DB!, limit);
+        return jsonResponse({ signals, count: signals.length });
+      }
+
+      // ─── Market Regime ─────────────────────────────
+      if (path === '/api/regime') {
+        const regime = await detectRegime(env);
+        return jsonResponse(regime);
+      }
+
+      // ─── Risk Events ──────────────────────────────
+      if (path === '/api/risk-events') {
+        const events = await getRecentRiskEvents(env.DB!, 20);
+        return jsonResponse({ events, count: events.length });
       }
 
       // ─── 404 ───────────────────────────────────────
@@ -215,8 +287,17 @@ export default {
           'GET /api/polymarket',
           'GET /api/commodities',
           'GET /api/indices',
+          'GET /api/portfolio',
+          'GET /api/performance',
+          'GET /api/account',
+          'GET /api/positions',
+          'GET /api/trades?status=open&limit=20',
+          'GET /api/d1-positions',
+          'GET /api/signals?limit=50',
+          'GET /api/regime',
+          'GET /api/risk-events',
           'GET /api/test-alert',
-          'GET /api/trigger?job=morning|open|quick|hourly|evening|afterhours|weekly',
+          'GET /api/trigger?job=morning|open|opening_range|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
         ],
       }, 404);
     } catch (err) {
