@@ -1,0 +1,15 @@
+{
+  "watchlist": [
+    { "symbol": "AAPL", "name": "Apple Inc.", "sector": "Technology" },
+    { "symbol": "MSFT", "name": "Microsoft Corp.", "sector": "Technology" },
+    { "symbol": "NVDA", "name": "NVIDIA Corp.", "sector": "Technology" },
+    { "symbol": "GOOGL", "name": "Alphabet Inc.", "sector": "Technology" },
+    { "symbol": "AMZN", "name": "Amazon.com Inc.", "sector": "Consumer Cyclical" },
+    { "symbol": "META", "name": "Meta Platforms", "sector": "Technology" },
+    { "symbol": "TSLA", "name": "Tesla Inc.", "sector": "Consumer Cyclical" },
+    { "symbol": "AMD", "name": "Advanced Micro Devices", "sector": "Technology" },
+    { "symbol": "AVGO", "name": "Broadcom Inc.", "sector": "Technology" },
+    { "symbol": "CRM", "name": "Salesforce Inc.", "sector": "Technology" }
+  ],
+  "notes": "Edit this file to customize your watchlist. Changes are loaded on each cron run."
+}

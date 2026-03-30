@@ -1,0 +1,44 @@
+{
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "priorities": ["CRITICAL", "IMPORTANT", "INFO"]
+    },
+    "whatsapp": {
+      "enabled": false,
+      "priorities": ["CRITICAL"]
+    },
+    "email": {
+      "enabled": false,
+      "priorities": ["INFO"]
+    }
+  },
+  "batching": {
+    "CRITICAL": {
+      "mode": "immediate",
+      "description": "Send immediately when detected"
+    },
+    "IMPORTANT": {
+      "mode": "batched",
+      "intervalMinutes": 30,
+      "description": "Batch and send every 30 minutes"
+    },
+    "INFO": {
+      "mode": "digest",
+      "schedule": "daily",
+      "description": "Include in daily digest only"
+    }
+  },
+  "quietHours": {
+    "enabled": true,
+    "start": "23:00",
+    "end": "06:00",
+    "timezone": "Asia/Jerusalem",
+    "overrideForCritical": true
+  },
+  "duplicateSuppression": {
+    "enabled": true,
+    "windowMinutes": 60,
+    "description": "Suppress duplicate signals for same symbol within window"
+  }
+}

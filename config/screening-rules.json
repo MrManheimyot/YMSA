@@ -1,0 +1,108 @@
+{
+  "rules": [
+    {
+      "name": "RSI Oversold",
+      "enabled": true,
+      "priority": "CRITICAL",
+      "conditions": [
+        { "indicator": "RSI", "operator": "<=", "value": 30 }
+      ]
+    },
+    {
+      "name": "RSI Extremely Oversold",
+      "enabled": true,
+      "priority": "CRITICAL",
+      "conditions": [
+        { "indicator": "RSI", "operator": "<=", "value": 25 }
+      ]
+    },
+    {
+      "name": "RSI Overbought",
+      "enabled": true,
+      "priority": "IMPORTANT",
+      "conditions": [
+        { "indicator": "RSI", "operator": ">=", "value": 70 }
+      ]
+    },
+    {
+      "name": "RSI Extremely Overbought",
+      "enabled": true,
+      "priority": "CRITICAL",
+      "conditions": [
+        { "indicator": "RSI", "operator": ">=", "value": 75 }
+      ]
+    },
+    {
+      "name": "Golden Cross (EMA 50/200)",
+      "enabled": true,
+      "priority": "CRITICAL",
+      "conditions": [
+        { "indicator": "EMA_50", "operator": "CROSSES_ABOVE", "value": 0 }
+      ]
+    },
+    {
+      "name": "Death Cross (EMA 50/200)",
+      "enabled": true,
+      "priority": "CRITICAL",
+      "conditions": [
+        { "indicator": "EMA_50", "operator": "CROSSES_BELOW", "value": 0 }
+      ]
+    },
+    {
+      "name": "MACD Bullish Crossover",
+      "enabled": true,
+      "priority": "IMPORTANT",
+      "conditions": [
+        { "indicator": "MACD", "operator": "CROSSES_ABOVE", "value": 0 }
+      ]
+    },
+    {
+      "name": "MACD Bearish Crossover",
+      "enabled": true,
+      "priority": "IMPORTANT",
+      "conditions": [
+        { "indicator": "MACD", "operator": "CROSSES_BELOW", "value": 0 }
+      ]
+    },
+    {
+      "name": "Near 52-Week High",
+      "enabled": true,
+      "priority": "IMPORTANT",
+      "conditions": [
+        { "indicator": "52W_POSITION", "operator": ">=", "value": 0.95 }
+      ]
+    },
+    {
+      "name": "Near 52-Week Low",
+      "enabled": true,
+      "priority": "IMPORTANT",
+      "conditions": [
+        { "indicator": "52W_POSITION", "operator": "<=", "value": 0.05 }
+      ]
+    },
+    {
+      "name": "Volume Spike",
+      "enabled": true,
+      "priority": "IMPORTANT",
+      "conditions": [
+        { "indicator": "VOLUME", "operator": ">=", "value": 1.5 }
+      ]
+    },
+    {
+      "name": "Extreme Volume Spike",
+      "enabled": true,
+      "priority": "CRITICAL",
+      "conditions": [
+        { "indicator": "VOLUME", "operator": ">=", "value": 3.0 }
+      ]
+    },
+    {
+      "name": "Fibonacci 61.8% Level",
+      "enabled": true,
+      "priority": "IMPORTANT",
+      "conditions": [
+        { "indicator": "PRICE", "operator": "==", "value": 0.618 }
+      ]
+    }
+  ]
+}

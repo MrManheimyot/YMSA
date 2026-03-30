@@ -1,0 +1,55 @@
+name: Deploy to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy YMSA to Cloudflare
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Set Worker Secrets
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WORKER_NAME: ymsa-financial-automation
+        run: |
+          set_secret() {
+            curl -s -X PUT \
+              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/scripts/$WORKER_NAME/secrets" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\": \"$1\", \"text\": \"$2\", \"type\": \"secret_text\"}"
+          }
+          echo "🔐 Setting secrets..."
+          set_secret "ALPHA_VANTAGE_API_KEY" "${{ secrets.ALPHA_VANTAGE_API_KEY }}" && echo "  ✅ ALPHA_VANTAGE"
+          set_secret "TAAPI_API_KEY" "${{ secrets.TAAPI_API_KEY }}" && echo "  ✅ TAAPI"
+          set_secret "FINNHUB_API_KEY" "${{ secrets.FINNHUB_API_KEY }}" && echo "  ✅ FINNHUB"
+          set_secret "FRED_API_KEY" "${{ secrets.FRED_API_KEY }}" && echo "  ✅ FRED"
+          set_secret "TELEGRAM_BOT_TOKEN" "${{ secrets.TELEGRAM_BOT_TOKEN }}" && echo "  ✅ TELEGRAM_BOT_TOKEN"
+          set_secret "TELEGRAM_CHAT_ID" "${{ secrets.TELEGRAM_CHAT_ID }}" && echo "  ✅ TELEGRAM_CHAT_ID"
+          echo "✅ All secrets set"

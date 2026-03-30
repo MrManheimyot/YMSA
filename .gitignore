@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+dist/
+
+# Secrets — NEVER commit these
+.secrets.json
+API-KEYS.txt
+deploy.mjs
+set-secrets.mjs
+setup.ps1
+.env
+.env.*
+*.pem
+*.key
+
+# Cloudflare
+.wrangler/
+.dev.vars
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+npm-debug.log*

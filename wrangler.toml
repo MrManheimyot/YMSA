@@ -1,0 +1,76 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "ymsa-financial-automation"
+main = "src/index.ts"
+compatibility_date = "2026-03-26"
+compatibility_flags = ["nodejs_compat"]
+account_id = "25d6c25b2232bbe0a5ae57c6fde9921c"
+
+# ─── Cron Triggers ────────────────────────────────────────────
+# All times in UTC. Israel Standard Time = UTC+2 (IST) / UTC+3 (IDT)
+# US Market Hours: 14:30-21:00 UTC (9:30-16:00 ET)
+[triggers]
+crons = [
+  "0 5 * * 1-5",          # 07:00 IST — Morning pre-market briefing
+  "30 14 * * 1-5",        # US Market Open — Full scan
+  "*/15 14-21 * * 1-5",   # Every 15min during US market hours (RSI/MACD)
+  "0 15-21 * * 1-5",      # Every hour during market — EMA/Fib/Screener
+  "0 15 * * 1-5",         # 17:00 IST — Evening post-market summary
+  "0 18 * * 1-5",         # 20:00 IST — After-hours earnings scan
+  "0 7 * * 0",            # Sunday 09:00 IST — Weekly portfolio review
+]
+
+# ─── Environment Variables (non-secret) ──────────────────────
+[vars]
+ENVIRONMENT = "production"
+TIMEZONE = "Asia/Jerusalem"
+DEFAULT_WATCHLIST = "AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA,AMD,AVGO,CRM"
+RSI_OVERBOUGHT = "70"
+RSI_OVERSOLD = "30"
+EMA_FAST = "50"
+EMA_SLOW = "200"
+FIBO_LEVELS = "0,0.236,0.382,0.5,0.618,0.786,1.0"
+FIBO_EXTENSIONS = "1.272,1.618,2.618"
+ALERT_PROXIMITY_52W = "0.05"
+VOLUME_SPIKE_MULTIPLIER = "1.5"
+CRYPTO_WATCHLIST = "bitcoin,ethereum,solana,cardano,polkadot"
+
+# ─── KV Namespaces ───────────────────────────────────────────
+# Create with: wrangler kv namespace create YMSA_CACHE
+# [[kv_namespaces]]
+# binding = "YMSA_CACHE"
+# id = "<YOUR_KV_NAMESPACE_ID>"
+
+# ─── R2 Bucket ───────────────────────────────────────────────
+# Create with: wrangler r2 bucket create ymsa-data
+# [[r2_buckets]]
+# binding = "YMSA_DATA"
+# bucket_name = "ymsa-data"
+
+# ─── Durable Objects (enable in Phase 2) ─────────────────────
+# [durable_objects]
+# bindings = [
+#   { name = "ORCHESTRATOR", class_name = "OrchestratorDO" },
+#   { name = "PORTFOLIO", class_name = "PortfolioDO" },
+# ]
+# [[migrations]]
+# tag = "v1"
+# new_sqlite_classes = ["OrchestratorDO", "PortfolioDO"]
+
+# ─── D1 Database ─────────────────────────────────────────────
+# Create with: wrangler d1 create ymsa-db
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "ymsa-db"
+# database_id = "<YOUR_D1_DATABASE_ID>"
+
+# ─── Secrets (set via CLI, never in this file) ───────────────
+# wrangler secret put ALPHA_VANTAGE_API_KEY
+# wrangler secret put TAAPI_API_KEY
+# wrangler secret put FINNHUB_API_KEY
+# wrangler secret put FRED_API_KEY
+# wrangler secret put TELEGRAM_BOT_TOKEN
+# wrangler secret put TELEGRAM_CHAT_ID
+
+# ─── Browser Rendering (Playwright for Finviz/Google scraping)
+[browser]
+binding = "BROWSER"
