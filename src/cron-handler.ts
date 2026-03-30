@@ -2,7 +2,7 @@
 // Full 5-agent signal pipeline → Orchestrator → Risk → Telegram
 // All signals, no execution — manual trading only
 
-import type { Env, CronJobType, TechnicalIndicator } from './types';
+import type { Env, CronJobType } from './types';
 import * as taapi from './api/taapi';
 import * as finnhub from './api/finnhub';
 import * as yahooFinance from './api/yahoo-finance';
@@ -63,7 +63,7 @@ function identifyCronJob(cron: string): CronJobType {
   if (cron.startsWith('*/15')) return 'QUICK_SCAN_15MIN';
   if (cron === '0 15 * * 1-5') return 'EVENING_SUMMARY';
   if (cron === '0 18 * * 1-5') return 'AFTER_HOURS_SCAN';
-  if (cron === '0 7 * * 0') return 'WEEKLY_REVIEW';
+  if (cron === '0 7 * * SUN' || cron === '0 7 * * 0') return 'WEEKLY_REVIEW';
   return 'FULL_SCAN_HOURLY';
 }
 
@@ -197,17 +197,12 @@ async function runQuickScan(env: Env): Promise<void> {
   const watchlist = getWatchlist(env);
 
   for (const symbol of watchlist) {
-    const [quote, rsi, macd] = await Promise.all([
+    const [quote, indicators] = await Promise.all([
       yahooFinance.getQuote(symbol),
-      taapi.getRSI(symbol, env),
-      taapi.getMACD(symbol, env),
+      taapi.getBulkIndicators(symbol, env),
     ]);
 
     if (!quote) continue;
-
-    const indicators: TechnicalIndicator[] = [];
-    if (rsi) indicators.push(rsi);
-    if (macd) indicators.push(...macd);
 
     const signals = detectSignals(quote, indicators, null, env);
     const criticalSignals = signals.filter((s) => s.priority === 'CRITICAL');
@@ -250,22 +245,13 @@ async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
   let totalSignals = 0;
 
   for (const symbol of watchlist) {
-    const [quote, rsi, macd, ema50, ema200, ohlcv] = await Promise.all([
+    const [quote, indicators, ohlcv] = await Promise.all([
       yahooFinance.getQuote(symbol),
-      taapi.getRSI(symbol, env),
-      taapi.getMACD(symbol, env),
-      taapi.getEMA(symbol, 50, env),
-      taapi.getEMA(symbol, 200, env),
+      taapi.getBulkIndicators(symbol, env),
       yahooFinance.getOHLCV(symbol, '6mo', '1d'),
     ]);
 
     if (!quote) continue;
-
-    const indicators: TechnicalIndicator[] = [];
-    if (rsi) indicators.push(rsi);
-    if (macd) indicators.push(...macd);
-    if (ema50) indicators.push(ema50);
-    if (ema200) indicators.push(ema200);
 
     const fibonacci = ohlcv.length > 0 ? calculateFibonacci(symbol, ohlcv, quote.price) : null;
     const signals = detectSignals(quote, indicators, fibonacci, env);

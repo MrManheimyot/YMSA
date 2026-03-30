@@ -1,16 +1,15 @@
 // ─── TAAPI.IO API Client ─────────────────────────────────────
 // Provides: 200+ technical indicators with real-time data
-// Free tier: 1 req/15sec | Pro: unlimited
-// Docs: https://taapi.io/documentation/
+// Free tier: 1 req/15sec — use bulk endpoint (20 calcs/request) to minimize calls
+// Docs: https://taapi.io/documentation/stocks/
 
 import type { Env, TechnicalIndicator, Timeframe } from '../types';
 
 const BASE_URL = 'https://api.taapi.io';
 
 // ─── Rate Limiter ────────────────────────────────────────────
-// Free tier: 1 request per 15 seconds. We queue all calls and
-// enforce a minimum 15.5s gap between requests.
-const RATE_LIMIT_MS = 15_500; // 15.5s to be safe
+// Free tier: 1 request per 15 seconds
+const RATE_LIMIT_MS = 15_500;
 let lastRequestTime = 0;
 
 async function rateLimitedWait(): Promise<void> {
@@ -26,6 +25,7 @@ async function rateLimitedWait(): Promise<void> {
 
 /**
  * Generic indicator fetch from TAAPI.IO (rate-limited)
+ * Uses type=stocks for US equities (no exchange param needed)
  */
 async function fetchIndicator(
   indicator: string,
@@ -34,13 +34,12 @@ async function fetchIndicator(
   interval: string = '1d',
   params: Record<string, string> = {}
 ): Promise<Record<string, number> | null> {
-  // Wait for rate limit before making request
   await rateLimitedWait();
 
   const queryParams = new URLSearchParams({
     secret: env.TAAPI_API_KEY,
-    exchange: 'stocks',
-    symbol: `${symbol}/USD`,
+    type: 'stocks',
+    symbol,
     interval,
     ...params,
   });
@@ -214,30 +213,76 @@ export async function getATR(
 }
 
 /**
- * Bulk fetch — get multiple indicators sequentially (respects rate limit)
- * On free tier, this takes ~60s per symbol (4 indicators × 15s each)
+ * Bulk fetch — get multiple indicators in ONE request using TAAPI bulk API
+ * POST /bulk allows up to 20 indicator calculations per request (even free tier)
+ * This uses 1 API call instead of 4, dramatically reducing rate limit impact
  */
 export async function getBulkIndicators(
   symbol: string,
   env: Env,
   interval: string = '1d'
 ): Promise<TechnicalIndicator[]> {
-  const indicators: TechnicalIndicator[] = [];
+  await rateLimitedWait();
 
-  // Sequential — rate limiter enforces 15s gap between each call
-  const rsi = await getRSI(symbol, env, interval);
-  if (rsi) indicators.push(rsi);
+  const body = {
+    secret: env.TAAPI_API_KEY,
+    construct: {
+      type: 'stocks',
+      symbol,
+      interval,
+      indicators: [
+        { id: 'rsi', indicator: 'rsi', period: 14 },
+        { id: 'macd', indicator: 'macd' },
+        { id: 'ema50', indicator: 'ema', period: 50 },
+        { id: 'ema200', indicator: 'ema', period: 200 },
+      ],
+    },
+  };
 
-  const macd = await getMACD(symbol, env, interval);
-  if (macd) indicators.push(...macd);
+  try {
+    const res = await fetch(`${BASE_URL}/bulk`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
 
-  const ema50 = await getEMA(symbol, 50, env, interval);
-  if (ema50) indicators.push(ema50);
+    if (res.status === 429) {
+      console.warn(`[TAAPI] Bulk rate limited for ${symbol}`);
+      return [];
+    }
+    if (!res.ok) {
+      console.error(`[TAAPI] Bulk error: ${res.status} ${res.statusText}`);
+      return [];
+    }
 
-  const ema200 = await getEMA(symbol, 200, env, interval);
-  if (ema200) indicators.push(ema200);
+    const json = await res.json() as { data: Array<{ id: string; result: Record<string, number>; errors: string[] }> };
+    const indicators: TechnicalIndicator[] = [];
+    const tf = mapInterval(interval);
 
-  return indicators;
+    for (const item of json.data) {
+      if (item.errors?.length > 0) continue;
+
+      if (item.id === 'rsi' && item.result?.value !== undefined) {
+        indicators.push({ symbol, indicator: 'RSI', value: item.result.value, timestamp: Date.now(), timeframe: tf });
+      } else if (item.id === 'macd') {
+        if (item.result?.valueMACD !== undefined) {
+          indicators.push({ symbol, indicator: 'MACD', value: item.result.valueMACD, timestamp: Date.now(), timeframe: tf });
+          indicators.push({ symbol, indicator: 'MACD_SIGNAL', value: item.result.valueMACDSignal ?? 0, signal: item.result.valueMACDSignal ?? 0, timestamp: Date.now(), timeframe: tf });
+          indicators.push({ symbol, indicator: 'MACD_HISTOGRAM', value: item.result.valueMACDHist ?? 0, histogram: item.result.valueMACDHist ?? 0, timestamp: Date.now(), timeframe: tf });
+        }
+      } else if (item.id === 'ema50' && item.result?.value !== undefined) {
+        indicators.push({ symbol, indicator: 'EMA_50', value: item.result.value, timestamp: Date.now(), timeframe: tf });
+      } else if (item.id === 'ema200' && item.result?.value !== undefined) {
+        indicators.push({ symbol, indicator: 'EMA_200', value: item.result.value, timestamp: Date.now(), timeframe: tf });
+      }
+    }
+
+    console.log(`[TAAPI] Bulk ${symbol}: ${indicators.length} indicators in 1 request`);
+    return indicators;
+  } catch (err) {
+    console.error(`[TAAPI] Bulk error for ${symbol}:`, err);
+    return [];
+  }
 }
 
 /**
