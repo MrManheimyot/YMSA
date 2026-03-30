@@ -16,7 +16,7 @@ crons = [
   "0 15-21 * * 1-5",      # Every hour during market — EMA/Fib/Screener
   "0 15 * * 1-5",         # 17:00 IST — Evening post-market summary
   "0 18 * * 1-5",         # 20:00 IST — After-hours earnings scan
-  "0 7 * * 0",            # Sunday 09:00 IST — Weekly portfolio review
+  "0 7 * * SUN",          # Sunday 09:00 IST — Weekly portfolio review
 ]
 
 # ─── Environment Variables (non-secret) ──────────────────────
