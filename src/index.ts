@@ -13,6 +13,7 @@ import * as polymarket from './api/polymarket';
 import * as fred from './api/fred';
 import { calculateFibonacci, formatFibonacciAlert } from './analysis/fibonacci';
 import { detectSignals, calculateSignalScore } from './analysis/signals';
+import { renderDashboard, getSystemStatus } from './dashboard';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -32,6 +33,20 @@ export default {
           watchlist: env.DEFAULT_WATCHLIST.split(','),
           cryptoWatchlist: (env.CRYPTO_WATCHLIST || '').split(','),
         });
+      }
+
+      // ─── SRE Dashboard ─────────────────────────────
+      if (path === '/dashboard') {
+        const html = renderDashboard(url.origin);
+        return new Response(html, {
+          headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' },
+        });
+      }
+
+      // ─── System Status (for dashboard) ─────────────
+      if (path === '/api/system-status') {
+        const status = getSystemStatus(env);
+        return jsonResponse(status);
       }
 
       // ─── Auth Check — all /api/* routes require key ─────
@@ -178,6 +193,8 @@ export default {
         error: 'Not found',
         endpoints: [
           'GET /health',
+          'GET /dashboard',
+          'GET /api/system-status',
           'GET /api/quote?symbol=AAPL',
           'GET /api/analysis?symbol=AAPL',
           'GET /api/fibonacci?symbol=AAPL',
