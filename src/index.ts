@@ -17,7 +17,7 @@ import { detectSignals, calculateSignalScore } from './analysis/signals';
 import { detectRegime } from './analysis/regime';
 import { renderDashboard, getSystemStatus } from './dashboard';
 import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
-import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory } from './db/queries';
+import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentDailyPnl, getAllLatestEnginePerformance } from './db/queries';
 import { fetchGoogleAlerts, storeNewsAlerts, getFeedConfig } from './api/google-alerts';
 
 export default {
@@ -273,6 +273,19 @@ export default {
         return jsonResponse({ events, count: events.length });
       }
 
+      // ─── Daily P&L History ─────────────────────────
+      if (path === '/api/daily-pnl') {
+        const days = parseInt(url.searchParams.get('days') || '14', 10);
+        const pnl = await getRecentDailyPnl(env.DB!, days);
+        return jsonResponse({ pnl, count: pnl.length });
+      }
+
+      // ─── Engine Performance Stats ──────────────────
+      if (path === '/api/engine-stats') {
+        const latest = await getAllLatestEnginePerformance(env.DB!);
+        return jsonResponse({ engines: latest, count: latest.length });
+      }
+
       // ─── Google Alerts News ────────────────────────
       if (path === '/api/news') {
         const category = url.searchParams.get('category');
@@ -326,6 +339,8 @@ export default {
           'GET /api/signals?limit=50',
           'GET /api/regime',
           'GET /api/risk-events',
+          'GET /api/daily-pnl?days=14',
+          'GET /api/engine-stats',
           'GET /api/news?category=&limit=30&fresh=true',
           'GET /api/test-alert',
           'GET /api/trigger?job=morning|open|opening_range|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',

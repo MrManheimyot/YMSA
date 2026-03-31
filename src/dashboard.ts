@@ -101,6 +101,7 @@ export function getSystemStatus(env: Env): SystemStatus {
       'GET /api/trades?status=open&limit=20',
       'GET /api/d1-positions', 'GET /api/signals?limit=50',
       'GET /api/regime', 'GET /api/risk-events',
+      'GET /api/daily-pnl?days=14', 'GET /api/engine-stats',
       'GET /api/news?category=&limit=30&fresh=true',
       'GET /api/test-alert',
       'GET /api/trigger?job=morning|open|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
@@ -207,8 +208,8 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
 .engine-card{background:var(--c-surface-2);border-radius:var(--radius-m);padding:14px;border-left:3px solid var(--c-primary)}
 .engine-card .name{font-size:13px;font-weight:500;margin-bottom:2px}
 .engine-card .eid{font-family:'Roboto Mono',monospace;font-size:10px;color:var(--c-on-surface-2)}
-.engine-card .stats{display:flex;gap:12px;margin-top:8px;font-size:11px;color:var(--c-on-surface-2)}
-.engine-card .stats span{display:flex;flex-direction:column;gap:1px}
+.engine-card .stats{display:flex;gap:8px;margin-top:8px;font-size:10px;color:var(--c-on-surface-2);flex-wrap:wrap}
+.engine-card .stats span{display:flex;flex-direction:column;gap:1px;min-width:40px}
 .engine-card .stats .val{font-family:'Roboto Mono',monospace;font-weight:500;color:var(--c-on-surface);font-size:12px}
 .weight-bar{height:4px;background:var(--c-surface);border-radius:2px;margin-top:8px;overflow:hidden}
 .weight-bar-fill{height:100%;background:var(--c-primary);border-radius:2px;transition:width .6s}
@@ -495,7 +496,7 @@ function safeFetch(path) { return fetch(BASE + path).then(r => r.ok ? r.json() :
 
 // ─── Main Load ───────────────────────────────────
 async function loadDashboard() {
-  const [status, portfolio, regime, signals, trades, riskEvents, positions, news] = await Promise.all([
+  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats] = await Promise.all([
     safeFetch('/api/system-status'),
     safeFetch('/api/portfolio'),
     safeFetch('/api/regime'),
@@ -504,21 +505,25 @@ async function loadDashboard() {
     safeFetch('/api/risk-events'),
     safeFetch('/api/positions'),
     safeFetch('/api/news?limit=30'),
+    safeFetch('/api/performance'),
+    safeFetch('/api/daily-pnl?days=14'),
+    safeFetch('/api/engine-stats'),
   ]);
 
-  if (status) renderStatus(status);
-  renderPortfolio(portfolio);
+  if (status) renderStatus(status, engineStats);
+  renderPortfolio(portfolio, performance);
   renderRegime(regime);
   renderSignals(signals);
   renderTrades(trades);
   renderRiskEvents(riskEvents);
   renderPositions(positions);
   renderNews(news);
+  renderSparkline(dailyPnl);
   $('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
 // ─── System Status ───────────────────────────────
-function renderStatus(d) {
+function renderStatus(d, engineStats) {
   // Health
   const h = $('h-health');
   h.textContent = d.health === 'ok' ? 'HEALTHY' : 'DEGRADED';
@@ -536,18 +541,34 @@ function renderStatus(d) {
   const total = Object.keys(d.secrets).length;
   $('h-health-sub').textContent = setCount + '/' + total + ' secrets · ' + d.crons.length + ' crons · ' + d.endpoints.length + ' endpoints';
 
-  // Engines
+  // Engines — merge static config with live D1 stats
+  const statsMap = {};
+  if (engineStats && engineStats.engines) {
+    engineStats.engines.forEach(s => { statsMap[s.engine_id] = s; });
+  }
   const eg = $('engine-grid');
-  eg.innerHTML = d.engines.map(e => \`
+  eg.innerHTML = d.engines.map(e => {
+    const s = statsMap[e.id];
+    const wr = s ? (s.win_rate * 100).toFixed(0) + '%' : '—';
+    const pnl = s ? (s.pnl >= 0 ? '+' : '') + '$' + Number(s.pnl).toFixed(0) : '—';
+    const trades = s ? s.trades_executed : 0;
+    const sigs = s ? s.signals_generated : 0;
+    const pnlColor = s ? (s.pnl >= 0 ? 'var(--c-buy)' : 'var(--c-sell)') : 'var(--c-on-surface-2)';
+    return \`
     <div class="engine-card">
       <div class="name">\${e.name}</div>
       <div class="eid">\${e.id}</div>
       <div class="stats">
-        <span>Weight<div class="val">\${e.weight}%</div></span>
+        <span>Win Rate<div class="val">\${wr}</div></span>
+        <span>P&L<div class="val" style="color:\${pnlColor}">\${pnl}</div></span>
+        <span>Trades<div class="val">\${trades}</div></span>
+        <span>Signals<div class="val">\${sigs}</div></span>
       </div>
       <div class="weight-bar"><div class="weight-bar-fill" style="width:\${e.weight}%"></div></div>
+      <div style="text-align:right;font-size:9px;color:var(--c-on-surface-2);margin-top:2px">Weight: \${e.weight}%\${s ? ' · ' + s.date : ''}</div>
     </div>
-  \`).join('');
+  \`;
+  }).join('');
 
   // Crons
   const ct = document.querySelector('#cron-table tbody');
@@ -591,7 +612,7 @@ function renderStatus(d) {
 }
 
 // ─── Portfolio ───────────────────────────────────
-function renderPortfolio(p) {
+function renderPortfolio(p, perf) {
   if (!p) {
     $('h-equity').textContent = '—';
     $('h-equity').className = 'card-value';
@@ -600,9 +621,16 @@ function renderPortfolio(p) {
     $('h-daily-pnl').className = 'card-value';
     $('h-unrealized').textContent = '—';
     $('h-unrealized').className = 'card-value';
-    $('h-winrate').textContent = '—';
     $('h-cash-sub').textContent = 'Broker not connected';
     $('h-daily-pnl-sub').textContent = 'Connect Alpaca to see P&L';
+    // Still show win rate from performance metrics if available
+    if (perf && perf.totalTrades > 0) {
+      $('h-winrate').textContent = fmt(perf.winRate * 100, 1) + '%';
+      $('h-winrate').className = 'card-value ' + (perf.winRate > 0.5 ? 'up' : perf.winRate < 0.4 ? 'down' : '');
+    } else {
+      $('h-winrate').textContent = perf ? '0%' : '—';
+      $('h-winrate').className = 'card-value';
+    }
     return;
   }
   $('h-equity').textContent = fmtUsd(p.equity || p.total_equity);
@@ -620,7 +648,7 @@ function renderPortfolio(p) {
   $('h-unrealized').textContent = fmtUsd(upnl);
   $('h-unrealized').className = 'card-value ' + pnlClass(upnl);
 
-  const wr = p.win_rate ?? p.winRate;
+  const wr = p.win_rate ?? p.winRate ?? (perf ? perf.winRate : null);
   $('h-winrate').textContent = wr != null ? fmt(wr * 100, 1) + '%' : '—';
   $('h-winrate').className = 'card-value ' + (wr > 0.5 ? 'up' : wr < 0.4 ? 'down' : '');
 }
@@ -795,6 +823,31 @@ async function filterNews(category) {
   $('news-panel').innerHTML = '<div class="loading">Loading ' + category + '...</div>';
   const data = await safeFetch('/api/news?limit=20&category=' + category);
   renderNews(data);
+}
+
+// ─── P&L Sparkline ───────────────────────────────
+function renderSparkline(data) {
+  const panel = $('pnl-sparkline');
+  const days = data?.pnl || [];
+  if (!days.length) {
+    panel.innerHTML = '<div class="empty">No P&L history yet — data populates after first trading day</div>';
+    return;
+  }
+  // Sort ascending by date
+  const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date));
+  const vals = sorted.map(d => d.daily_pnl);
+  const maxAbs = Math.max(...vals.map(Math.abs), 1);
+  const barH = 36; // max bar height in px
+  panel.innerHTML = sorted.map((d, i) => {
+    const v = d.daily_pnl;
+    const h = Math.max(2, Math.abs(v) / maxAbs * barH);
+    const color = v >= 0 ? 'var(--c-buy)' : 'var(--c-sell)';
+    const pct = d.daily_pnl_pct != null ? fmtPct(d.daily_pnl_pct) : '';
+    return \`<div title="\${d.date}: \${fmtUsd(v)} (\${pct})" style="display:flex;flex-direction:column;align-items:\${v>=0?'flex-end':'flex-end'};justify-content:flex-end;flex:1;min-width:0">
+      <div style="width:100%;max-width:24px;height:\${h}px;background:\${color};border-radius:2px 2px 0 0;opacity:.8"></div>
+      <div style="font-size:7px;color:var(--c-on-surface-2);text-align:center;white-space:nowrap;overflow:hidden">\${d.date.slice(5)}</div>
+    </div>\`;
+  }).join('');
 }
 
 // ─── Test Runner ─────────────────────────────────

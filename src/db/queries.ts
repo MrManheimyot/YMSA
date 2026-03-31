@@ -220,6 +220,16 @@ export async function getEnginePerformance(db: D1Database, engineId: string, day
   return (result.results || []) as unknown as EnginePerformanceRecord[];
 }
 
+export async function getAllLatestEnginePerformance(db: D1Database): Promise<EnginePerformanceRecord[]> {
+  const result = await db.prepare(
+    `SELECT ep.* FROM engine_performance ep
+     INNER JOIN (SELECT engine_id, MAX(date) as max_date FROM engine_performance GROUP BY engine_id) latest
+     ON ep.engine_id = latest.engine_id AND ep.date = latest.max_date
+     ORDER BY ep.engine_id`
+  ).all();
+  return (result.results || []) as unknown as EnginePerformanceRecord[];
+}
+
 // ─── Regime History Queries ──────────────────────────────────
 
 export async function insertRegimeChange(
