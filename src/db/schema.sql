@@ -1,123 +1,122 @@
 -- ═══════════════════════════════════════════════════════════════
 -- YMSA v3.0 — D1 Database Schema
 -- Google SRE: Structured, auditable, with proper indices
+-- Columns MUST match queries.ts INSERT statements exactly
 -- ═══════════════════════════════════════════════════════════════
 
+-- Drop all tables to fix column mismatches (DB has 0 rows)
+DROP TABLE IF EXISTS trades;
+DROP TABLE IF EXISTS positions;
+DROP TABLE IF EXISTS signals;
+DROP TABLE IF EXISTS daily_pnl;
+DROP TABLE IF EXISTS engine_performance;
+DROP TABLE IF EXISTS regime_history;
+DROP TABLE IF EXISTS pairs_state;
+DROP TABLE IF EXISTS news_alerts;
+DROP TABLE IF EXISTS risk_events;
+
 -- ─── Trades (execution history) ──────────────────────────────
-CREATE TABLE IF NOT EXISTS trades (
+CREATE TABLE trades (
   id TEXT PRIMARY KEY,
-  engine_id TEXT NOT NULL,           -- MTF_MOMENTUM, SMART_MONEY, STAT_ARB, OPTIONS, CRYPTO, EVENT_DRIVEN
+  engine_id TEXT NOT NULL,
   symbol TEXT NOT NULL,
-  side TEXT NOT NULL,                -- BUY, SELL, SHORT, COVER
-  order_type TEXT NOT NULL,          -- MARKET, LIMIT, STOP, TRAILING_STOP
-  quantity REAL NOT NULL,
+  side TEXT NOT NULL,                -- BUY, SELL
+  qty REAL NOT NULL,
   entry_price REAL NOT NULL,
   exit_price REAL,
   stop_loss REAL,
   take_profit REAL,
-  realized_pnl REAL DEFAULT 0,
-  realized_pnl_pct REAL DEFAULT 0,
-  status TEXT NOT NULL DEFAULT 'OPEN', -- OPEN, CLOSED, CANCELLED, STOPPED
-  confidence REAL DEFAULT 0,
-  reasoning TEXT,
+  status TEXT NOT NULL DEFAULT 'OPEN', -- OPEN, CLOSED, CANCELLED
+  pnl REAL,
+  pnl_pct REAL,
   opened_at INTEGER NOT NULL,
   closed_at INTEGER,
-  holding_period_hours REAL,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  broker_order_id TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_trades_engine ON trades(engine_id);
-CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol);
-CREATE INDEX IF NOT EXISTS idx_trades_status ON trades(status);
-CREATE INDEX IF NOT EXISTS idx_trades_opened ON trades(opened_at);
+CREATE INDEX idx_trades_engine ON trades(engine_id);
+CREATE INDEX idx_trades_symbol ON trades(symbol);
+CREATE INDEX idx_trades_status ON trades(status);
+CREATE INDEX idx_trades_opened ON trades(opened_at);
 
 -- ─── Positions (current open) ────────────────────────────────
-CREATE TABLE IF NOT EXISTS positions (
+CREATE TABLE positions (
   id TEXT PRIMARY KEY,
-  trade_id TEXT NOT NULL REFERENCES trades(id),
-  engine_id TEXT NOT NULL,
   symbol TEXT NOT NULL,
+  engine_id TEXT NOT NULL,
   side TEXT NOT NULL,                -- LONG, SHORT
-  quantity REAL NOT NULL,
-  entry_price REAL NOT NULL,
+  qty REAL NOT NULL,
+  avg_entry REAL NOT NULL,
   current_price REAL DEFAULT 0,
   unrealized_pnl REAL DEFAULT 0,
-  unrealized_pnl_pct REAL DEFAULT 0,
   stop_loss REAL,
   take_profit REAL,
-  trailing_stop REAL,
-  sector TEXT,
-  opened_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  opened_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_positions_engine ON positions(engine_id);
-CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions(symbol);
+CREATE INDEX idx_positions_engine ON positions(engine_id);
+CREATE INDEX idx_positions_symbol ON positions(symbol);
 
 -- ─── Signals (all generated signals for audit) ──────────────
-CREATE TABLE IF NOT EXISTS signals (
+CREATE TABLE signals (
   id TEXT PRIMARY KEY,
   engine_id TEXT NOT NULL,
   signal_type TEXT NOT NULL,
   symbol TEXT NOT NULL,
-  priority TEXT NOT NULL,            -- CRITICAL, IMPORTANT, INFO
-  direction TEXT,                    -- BULLISH, BEARISH, NEUTRAL
-  value REAL,
-  score REAL DEFAULT 0,              -- ML-scored confidence 0-100
-  metadata TEXT,                     -- JSON blob for engine-specific data
-  acted_on INTEGER DEFAULT 0,       -- 0=no trade, 1=trade generated
-  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  direction TEXT NOT NULL,           -- BUY, SELL, HOLD
+  strength REAL DEFAULT 0,
+  metadata TEXT,                     -- JSON blob
+  created_at INTEGER NOT NULL,
+  acted_on INTEGER DEFAULT 0        -- 0=no trade, 1=trade generated
 );
 
-CREATE INDEX IF NOT EXISTS idx_signals_engine ON signals(engine_id);
-CREATE INDEX IF NOT EXISTS idx_signals_symbol ON signals(symbol);
-CREATE INDEX IF NOT EXISTS idx_signals_created ON signals(created_at);
+CREATE INDEX idx_signals_engine ON signals(engine_id);
+CREATE INDEX idx_signals_symbol ON signals(symbol);
+CREATE INDEX idx_signals_created ON signals(created_at);
 
 -- ─── Daily P&L Snapshots ─────────────────────────────────────
-CREATE TABLE IF NOT EXISTS daily_pnl (
+CREATE TABLE daily_pnl (
   date TEXT PRIMARY KEY,             -- YYYY-MM-DD
   total_equity REAL NOT NULL,
-  cash_balance REAL NOT NULL,
-  total_pnl REAL NOT NULL,
-  total_pnl_pct REAL NOT NULL,
-  engine_pnl TEXT NOT NULL,          -- JSON: { engine_id: pnl_pct }
-  num_trades INTEGER DEFAULT 0,
-  win_count INTEGER DEFAULT 0,
-  loss_count INTEGER DEFAULT 0,
-  max_drawdown_pct REAL DEFAULT 0,
-  regime TEXT,                       -- TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE
-  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  daily_pnl REAL NOT NULL,
+  daily_pnl_pct REAL NOT NULL,
+  open_positions INTEGER DEFAULT 0,
+  trades_today INTEGER DEFAULT 0,
+  win_rate REAL DEFAULT 0,
+  sharpe_snapshot REAL,
+  max_drawdown REAL
 );
 
 -- ─── Engine Performance (calibration data) ───────────────────
-CREATE TABLE IF NOT EXISTS engine_performance (
+CREATE TABLE engine_performance (
+  id TEXT PRIMARY KEY,
   engine_id TEXT NOT NULL,
-  period TEXT NOT NULL,              -- YYYY-MM or YYYY-Www
-  total_trades INTEGER DEFAULT 0,
+  date TEXT NOT NULL,
+  signals_generated INTEGER DEFAULT 0,
+  trades_executed INTEGER DEFAULT 0,
   win_rate REAL DEFAULT 0,
-  avg_pnl_pct REAL DEFAULT 0,
-  sharpe_ratio REAL DEFAULT 0,
-  max_drawdown_pct REAL DEFAULT 0,
-  profit_factor REAL DEFAULT 0,
-  current_weight REAL DEFAULT 0,
-  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
-  PRIMARY KEY (engine_id, period)
+  pnl REAL DEFAULT 0,
+  avg_rr REAL,
+  weight REAL DEFAULT 0
 );
+
+CREATE INDEX idx_engine_perf_engine ON engine_performance(engine_id);
+CREATE INDEX idx_engine_perf_date ON engine_performance(date);
 
 -- ─── Market Regime History ───────────────────────────────────
-CREATE TABLE IF NOT EXISTS regime_history (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE regime_history (
+  id TEXT PRIMARY KEY,
   regime TEXT NOT NULL,              -- TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE
-  vix REAL,
-  adx REAL,
-  spy_ema50_200_gap REAL,
-  detected_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  detected_at INTEGER NOT NULL,
+  vix_level REAL,
+  spy_trend TEXT,
+  confidence REAL
 );
 
-CREATE INDEX IF NOT EXISTS idx_regime_detected ON regime_history(detected_at);
+CREATE INDEX idx_regime_detected ON regime_history(detected_at);
 
 -- ─── Pairs Trading State ─────────────────────────────────────
-CREATE TABLE IF NOT EXISTS pairs_state (
+CREATE TABLE pairs_state (
   pair_key TEXT PRIMARY KEY,         -- SYMBOLA_SYMBOLB
   symbol_a TEXT NOT NULL,
   symbol_b TEXT NOT NULL,
@@ -133,27 +132,27 @@ CREATE TABLE IF NOT EXISTS pairs_state (
 );
 
 -- ─── Google Alerts News Cache ────────────────────────────────
-CREATE TABLE IF NOT EXISTS news_alerts (
+CREATE TABLE news_alerts (
   id TEXT PRIMARY KEY,               -- hash of url
-  category TEXT NOT NULL,            -- mega-tech, mna, fed-rates, etc.
+  category TEXT NOT NULL,
   title TEXT NOT NULL,
   url TEXT NOT NULL,
   published_at INTEGER NOT NULL,
   processed INTEGER DEFAULT 0,
-  sentiment REAL,                    -- -1.0 to 1.0
-  symbols_mentioned TEXT,            -- JSON array
   created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
 
-CREATE INDEX IF NOT EXISTS idx_news_category ON news_alerts(category);
-CREATE INDEX IF NOT EXISTS idx_news_published ON news_alerts(published_at);
+CREATE INDEX idx_news_category ON news_alerts(category);
+CREATE INDEX idx_news_published ON news_alerts(published_at);
 
 -- ─── Kill Switch / Risk Events ───────────────────────────────
-CREATE TABLE IF NOT EXISTS risk_events (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE risk_events (
+  id TEXT PRIMARY KEY,
   event_type TEXT NOT NULL,          -- KILL_SWITCH, DRAWDOWN_LIMIT, POSITION_LIMIT, etc.
   severity TEXT NOT NULL,            -- WARNING, CRITICAL, HALT
-  message TEXT NOT NULL,
-  portfolio_state TEXT,              -- JSON snapshot
-  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  description TEXT NOT NULL,
+  action_taken TEXT,
+  created_at INTEGER NOT NULL
 );
+
+CREATE INDEX idx_risk_created ON risk_events(created_at);
