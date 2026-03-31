@@ -32,7 +32,7 @@ export default {
           service: 'YMSA Multi-Engine Trading System',
           version: '3.0.0',
           engines: ['MTF_MOMENTUM', 'SMART_MONEY', 'STAT_ARB', 'OPTIONS', 'CRYPTO_DEFI', 'EVENT_DRIVEN'],
-          mode: env.ALPACA_PAPER_MODE === 'false' ? 'LIVE TRADING' : 'PAPER TRADING',
+          mode: !(env as any).ALPACA_API_KEY ? 'SIGNALS ONLY' : env.ALPACA_PAPER_MODE === 'false' ? 'LIVE TRADING' : 'PAPER TRADING',
           timestamp: new Date().toISOString(),
           watchlist: env.DEFAULT_WATCHLIST.split(','),
           cryptoWatchlist: (env.CRYPTO_WATCHLIST || '').split(','),

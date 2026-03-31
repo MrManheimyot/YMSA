@@ -124,6 +124,7 @@ export function renderDashboard(baseUrl: string): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>YMSA v3 — Trading Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -311,7 +312,7 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
           <span class="regime-badge range" id="regime-badge">LOADING</span>
           <div style="font-size:12px;color:var(--c-on-surface-2)">
             VIX: <span class="mono" id="regime-vix">—</span> &nbsp;|&nbsp;
-            SPY Trend: <span class="mono" id="regime-spy">—</span> &nbsp;|&nbsp;
+            ADX: <span class="mono" id="regime-adx">—</span> &nbsp;|&nbsp;
             Confidence: <span class="mono" id="regime-conf">—</span>
           </div>
         </div>
@@ -573,11 +574,16 @@ function renderStatus(d) {
 // ─── Portfolio ───────────────────────────────────
 function renderPortfolio(p) {
   if (!p) {
-    $('h-equity').textContent = 'N/A';
-    $('h-cash').textContent = 'N/A';
-    $('h-daily-pnl').textContent = 'N/A';
-    $('h-unrealized').textContent = 'N/A';
-    $('h-winrate').textContent = 'N/A';
+    $('h-equity').textContent = '—';
+    $('h-equity').className = 'card-value';
+    $('h-cash').textContent = '—';
+    $('h-daily-pnl').textContent = '—';
+    $('h-daily-pnl').className = 'card-value';
+    $('h-unrealized').textContent = '—';
+    $('h-unrealized').className = 'card-value';
+    $('h-winrate').textContent = '—';
+    $('h-cash-sub').textContent = 'Broker not connected';
+    $('h-daily-pnl-sub').textContent = 'Connect Alpaca to see P&L';
     return;
   }
   $('h-equity').textContent = fmtUsd(p.equity || p.total_equity);
@@ -613,10 +619,14 @@ function renderRegime(r) {
   rb.className = 'regime-badge ' + cls;
 
   $('regime-vix').textContent = fmt(r.vix ?? r.vix_level, 1);
-  $('regime-spy').textContent = r.spy_trend ?? r.spyTrend ?? '—';
-  $('regime-conf').textContent = r.confidence != null ? fmt(r.confidence * 100, 0) + '%' : '—';
+  $('regime-adx').textContent = fmt(r.adx, 1);
+  $('regime-conf').textContent = r.confidence != null ? fmt(r.confidence, 0) + '%' : '—';
 
-  if (r.weights || r.engineWeights) {
+  if (r.suggestedEngines && r.suggestedEngines.length) {
+    $('regime-weights').innerHTML = '<span style="color:var(--c-on-surface-2);font-size:11px">Suggested: </span>' + r.suggestedEngines.map(e =>
+      \`<span class="mono" style="margin-right:8px;padding:2px 8px;background:var(--c-surface-2);border-radius:4px;font-size:11px">\${e}</span>\`
+    ).join('');
+  } else if (r.weights || r.engineWeights) {
     const w = r.weights || r.engineWeights;
     $('regime-weights').innerHTML = Object.entries(w).map(([k,v]) =>
       \`<span class="mono" style="margin-right:12px">\${k}: <strong>\${typeof v === 'number' ? v+'%' : v}</strong></span>\`
