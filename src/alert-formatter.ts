@@ -12,7 +12,7 @@ import type { MarketRegime } from './analysis/regime';
 
 let currentRegime: MarketRegime | null = null;
 const recentAlerts = new Map<string, number>(); // key → timestamp
-const DEDUP_WINDOW_MS = 30 * 60 * 1000; // 30 minutes
+const DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000; // 24 hours — max once per day per stock
 
 export function setCurrentRegime(regime: MarketRegime): void {
   currentRegime = regime;
@@ -131,26 +131,24 @@ export function formatTechnicalAlert(
   }
 
   const rsi = indicators.find(i => i.indicator === 'RSI');
-  const ema50 = indicators.find(i => i.indicator === 'EMA_50');
-  const ema200 = indicators.find(i => i.indicator === 'EMA_200');
   const macd = indicators.find(i => i.indicator === 'MACD');
+  const macdSig = indicators.find(i => i.indicator === 'MACD_SIGNAL');
+  const sma50 = indicators.find(i => i.indicator === 'SMA_50');
+  const sma200 = indicators.find(i => i.indicator === 'SMA_200');
 
-  // Add indicator context to signals
-  if (rsi) signalLines.push(`• RSI(14): ${rsi.value.toFixed(1)}`);
-  if (ema50 && ema200) {
-    const cross = ema50.value > ema200.value ? 'above' : 'below';
-    signalLines.push(`• EMA(50) ${cross} EMA(200)`);
-  }
-  if (macd) {
-    const macdSig = indicators.find(i => i.indicator === 'MACD_SIGNAL');
-    if (macdSig) {
-      const cross = macd.value > macdSig.value ? 'bullish' : 'bearish';
-      signalLines.push(`• MACD: ${cross} (${macd.value.toFixed(3)})`);
-    }
-  }
   if (fibonacci?.nearestLevel) {
     signalLines.push(`• Fibonacci ${fibonacci.nearestLevel.label} at $${fibonacci.nearestLevel.price.toFixed(2)}`);
   }
+
+  // Technical Info section
+  const techLines: string[] = [];
+  if (rsi) techLines.push(`• RSI(14): ${rsi.value.toFixed(1)}`);
+  if (macd && macdSig) {
+    const macdDir = macd.value > macdSig.value ? 'Bullish' : 'Bearish';
+    techLines.push(`• MACD: ${macd.value.toFixed(3)} (${macdDir})`);
+  }
+  if (sma50) techLines.push(`• SMA 50: $${sma50.value.toFixed(2)}`);
+  if (sma200) techLines.push(`• SMA 200: $${sma200.value.toFixed(2)}`);
 
   const reason = reasonParts.length > 0
     ? reasonParts.slice(0, 2).join('. ') + '.'
@@ -166,6 +164,9 @@ export function formatTechnicalAlert(
     ``,
     `<b>Supporting Signals:</b>`,
     ...signalLines,
+    ``,
+    `<b>Technical Info:</b>`,
+    ...techLines,
     ``,
     `<b>Trade Setup:</b>`,
     `Entry: $${levels.entry.toFixed(2)}`,
@@ -270,6 +271,21 @@ export function formatSmartMoneyTradeAlert(
 
   const confidence = analysis.score;
 
+  // Technical Info
+  const rsi = indicators.find(i => i.indicator === 'RSI');
+  const macd = indicators.find(i => i.indicator === 'MACD');
+  const macdSig = indicators.find(i => i.indicator === 'MACD_SIGNAL');
+  const sma50 = indicators.find(i => i.indicator === 'SMA_50');
+  const sma200 = indicators.find(i => i.indicator === 'SMA_200');
+  const techLines: string[] = [];
+  if (rsi) techLines.push(`• RSI(14): ${rsi.value.toFixed(1)}`);
+  if (macd && macdSig) {
+    const macdDir = macd.value > macdSig.value ? 'Bullish' : 'Bearish';
+    techLines.push(`• MACD: ${macd.value.toFixed(3)} (${macdDir})`);
+  }
+  if (sma50) techLines.push(`• SMA 50: $${sma50.value.toFixed(2)}`);
+  if (sma200) techLines.push(`• SMA 200: $${sma200.value.toFixed(2)}`);
+
   const lines = [
     `🚨 <b>TRADE ALERT — ${analysis.symbol}</b>`,
     ``,
@@ -280,6 +296,9 @@ export function formatSmartMoneyTradeAlert(
     ``,
     `<b>Supporting Signals:</b>`,
     ...signalLines.slice(0, 5),
+    ``,
+    `<b>Technical Info:</b>`,
+    ...techLines,
     ``,
     `<b>Trade Setup:</b>`,
     `Entry: $${levels.entry.toFixed(2)}`,

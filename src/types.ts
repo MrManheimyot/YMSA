@@ -93,6 +93,8 @@ export type IndicatorType =
   | 'EMA_55'
   | 'EMA_200'
   | 'SMA_20'
+  | 'SMA_50'
+  | 'SMA_200'
   | 'MACD'
   | 'MACD_SIGNAL'
   | 'MACD_HISTOGRAM'

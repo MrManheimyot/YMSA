@@ -39,6 +39,18 @@ export function computeIndicators(
     indicators.push({ symbol, indicator: 'EMA_200', value: ema200, timestamp: now, timeframe });
   }
 
+  // SMA 50
+  const sma50 = calcSMA(prices, 50);
+  if (sma50 !== null) {
+    indicators.push({ symbol, indicator: 'SMA_50', value: sma50, timestamp: now, timeframe });
+  }
+
+  // SMA 200
+  const sma200 = calcSMA(prices, 200);
+  if (sma200 !== null) {
+    indicators.push({ symbol, indicator: 'SMA_200', value: sma200, timestamp: now, timeframe });
+  }
+
   // MACD(12, 26, 9)
   const macd = calcMACD(prices, 12, 26, 9);
   if (macd) {
@@ -99,6 +111,13 @@ function calcEMA(prices: number[], period: number): number | null {
     ema = prices[i] * k + ema * (1 - k);
   }
   return ema;
+}
+
+/** Calculate SMA - returns the latest value (simple average of last N prices) */
+function calcSMA(prices: number[], period: number): number | null {
+  if (prices.length < period) return null;
+  const slice = prices.slice(prices.length - period);
+  return slice.reduce((s, p) => s + p, 0) / period;
 }
 
 /** Calculate MACD(fast, slow, signal) */

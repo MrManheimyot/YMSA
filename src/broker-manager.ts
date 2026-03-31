@@ -65,6 +65,7 @@ let cycleOutputs: EngineOutput[] = [];
 let cycleRegime: MarketRegime | null = null;
 let cycleContext: string[] = [];   // market commentary lines
 let cyclePending = false;
+let cycleIndicators: Map<string, TechnicalIndicator[]> = new Map(); // symbol → indicators
 
 // Hourly alert budget
 const alertHistory: number[] = [];
@@ -81,9 +82,9 @@ function recordTradeAlert(): void {
   alertHistory.push(Date.now());
 }
 
-// Cross-cycle dedup (1 hour window)
+// Cross-cycle dedup (24 hour window — max once per day per stock)
 const sentKeys = new Map<string, number>();
-const DEDUP_MS = 60 * 60 * 1000;
+const DEDUP_MS = 24 * 60 * 60 * 1000;
 
 function wasSentRecently(key: string): boolean {
   const now = Date.now();
@@ -105,6 +106,7 @@ export function beginCycle(): void {
   cycleOutputs = [];
   cycleContext = [];
   cycleRegime = null;
+  cycleIndicators = new Map();
   cyclePending = true;
 }
 
@@ -127,8 +129,14 @@ export function pushSmartMoney(
   smc: SmartMoneyAnalysis,
   quote: StockQuote,
   atr: number | null,
+  indicators?: TechnicalIndicator[],
 ): void {
   if (smc.score < 50) return;
+
+  // Store indicators for this symbol if provided
+  if (indicators && indicators.length > 0) {
+    cycleIndicators.set(smc.symbol, indicators);
+  }
   const dir: 'BUY' | 'SELL' = smc.overallBias === 'BULLISH' ? 'BUY' : 'SELL';
   const effectiveATR = atr && atr > 0 ? atr : quote.price * 0.02;
   const zone = smc.signals.sort((a, b) => b.strength - a.strength)[0]?.zone;
@@ -207,6 +215,9 @@ export function pushTechnical(
   _fibonacci: FibonacciResult | null,
 ): void {
   if (signals.length === 0) return;
+
+  // Store indicators for this symbol (used in planTradeAlert)
+  cycleIndicators.set(quote.symbol, indicators);
 
   // Derive direction
   let buyScore = 0, sellScore = 0;
@@ -316,7 +327,6 @@ function planTradeAlert(trade: MergedTrade, aiReasoning?: string): MessagePlan |
 
   const confLabel = trade.confidence >= 80 ? 'High' : trade.confidence >= 55 ? 'Medium' : 'Low';
   const emoji = trade.direction === 'BUY' ? '🟢' : '🔴';
-  const engineList = trade.engines.join(' + ');
 
   // Regime context
   let regimeNote = '';
@@ -331,23 +341,54 @@ function planTradeAlert(trade: MergedTrade, aiReasoning?: string): MessagePlan |
     if (cycleRegime.vix >= 25) regimeNote += ` VIX ${cycleRegime.vix.toFixed(0)}.`;
   }
 
+  // Technical Info — RSI, MACD, SMA 50, SMA 200
+  const indicators = cycleIndicators.get(trade.symbol) || [];
+  const rsi = indicators.find(i => i.indicator === 'RSI');
+  const macd = indicators.find(i => i.indicator === 'MACD');
+  const macdSig = indicators.find(i => i.indicator === 'MACD_SIGNAL');
+  const sma50 = indicators.find(i => i.indicator === 'SMA_50');
+  const sma200 = indicators.find(i => i.indicator === 'SMA_200');
+
+  const techLines: string[] = [];
+  if (rsi) techLines.push(`RSI(14): ${rsi.value.toFixed(1)}`);
+  if (macd && macdSig) {
+    const cross = macd.value > macdSig.value ? 'Bullish' : 'Bearish';
+    techLines.push(`MACD: ${macd.value.toFixed(3)} (${cross})`);
+  }
+  if (sma50) techLines.push(`SMA 50: $${sma50.value.toFixed(2)}`);
+  if (sma200) techLines.push(`SMA 200: $${sma200.value.toFixed(2)}`);
+
   const lines = [
-    `${emoji} <b>${trade.direction} ${trade.symbol}</b>`,
+    `${emoji} <b>TRADE ALERT — ${trade.direction} ${trade.symbol}</b>`,
     ``,
-    `<b>Why:</b> ${trade.reasons[0]}`,
+    `<b>Reason:</b> ${trade.reasons[0]}`,
     ...(aiReasoning ? [`🧠 <i>${aiReasoning}</i>`] : []),
-    ...(trade.engines.length > 1 ? [`<b>Models:</b> ${engineList} (${trade.engines.length} agree)`] : []),
-    ...(trade.conflicting ? [`⚠️ <i>Conflicting signals from other engines</i>`] : []),
     ``,
-    `<b>Setup:</b>`,
-    `Entry $${trade.entry.toFixed(2)} → SL $${trade.stopLoss.toFixed(2)}`,
-    `TP1 $${trade.tp1.toFixed(2)} (${rr1}R) | TP2 $${trade.tp2.toFixed(2)} (${rr2}R)`,
+    `<b>Signals:</b>`,
+    ...trade.signals.slice(0, 5).map(s => `• ${s}`),
+    ...(trade.engines.length > 1 ? [`• Models: ${trade.engines.join(' + ')} (${trade.engines.length} agree)`] : []),
+    ...(trade.conflicting ? [`• ⚠️ Conflicting signals from other engines`] : []),
     ``,
-    `<b>Confidence:</b> ${trade.confidence}/100 ${confLabel}`,
-    ...(regimeNote ? [regimeNote] : []),
+    ...(techLines.length > 0 ? [
+      `<b>Technical Info:</b>`,
+      ...techLines.map(t => `• ${t}`),
+      ``,
+    ] : []),
+    `<b>Trade Setup:</b>`,
+    `  Entry: $${trade.entry.toFixed(2)}`,
+    `  Stop Loss: $${trade.stopLoss.toFixed(2)}`,
+    `  Take Profit:`,
+    `    TP1: $${trade.tp1.toFixed(2)} (R:R 1:${rr1})`,
+    `    TP2: $${trade.tp2.toFixed(2)} (R:R 1:${rr2})`,
+    ``,
+    `<b>Confidence:</b> ${trade.confidence}/100 (${confLabel})`,
+    ``,
+    `<b>Market Context:</b>`,
+    ...(regimeNote ? [regimeNote] : ['Regime data unavailable.']),
     ``,
     `🔗 <a href="https://tradingview.com/symbols/${trade.symbol}">Chart</a>` +
     ` · <a href="https://finance.yahoo.com/quote/${trade.symbol}">Yahoo</a>`,
+    `⏰ ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`,
   ];
 
   return {
@@ -506,6 +547,7 @@ export async function flushCycle(env: Env): Promise<number> {
   cycleOutputs = [];
   cycleContext = [];
   cycleRegime = null;
+  cycleIndicators = new Map();
 
   return sent;
 }

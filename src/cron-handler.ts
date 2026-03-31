@@ -23,7 +23,7 @@ import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from './api/goog
 import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEnginePerformance, getPerformanceMetrics, formatPerformanceReport } from './execution/portfolio';
 import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
 import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
-import { insertRiskEvent, generateId, getClosedTradesSince } from './db/queries';
+import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, sendRiskAlert, sendExecutionAlert } from './broker-manager';
 import { scoreNewsSentiment, weeklyNarrative, isZAiAvailable } from './ai/z-engine';
@@ -430,23 +430,11 @@ async function runPolymarketScan(env: Env): Promise<void> {
 
 async function runCommodityScan(env: Env): Promise<void> {
   try {
-    const [commodities, yieldCurve] = await Promise.all([
+    const [, yieldCurve] = await Promise.all([
       yahooFinance.getCommodityPrices(),
       fred.checkYieldCurve(env.FRED_API_KEY),
       fred.getCommodityPrices(env.FRED_API_KEY),
     ]);
-
-    // Alert on big commodity moves (> 2%)
-    const bigMoves = commodities.filter((c) => Math.abs(c.changePercent) > 2);
-    if (bigMoves.length > 0) {
-      const lines = [`🛢️ <b>Commodity Alert — Big Moves:</b>`, ``];
-      for (const c of bigMoves) {
-        const emoji = c.changePercent > 0 ? '📈' : '📉';
-        const name = Object.entries(yahooFinance.COMMODITY_SYMBOLS).find(([, v]) => v === c.symbol)?.[0] || c.symbol;
-        lines.push(`  ${emoji} <b>${name}</b>: $${c.price.toFixed(2)} (${c.changePercent > 0 ? '+' : ''}${c.changePercent.toFixed(1)}%)`);
-      }
-      await sendTelegramMessage(lines.join('\n'), env);
-    }
 
     // Yield curve alert
     if (yieldCurve && yieldCurve.inverted) {
@@ -462,50 +450,104 @@ async function runCommodityScan(env: Env): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 async function runEveningSummary(env: Env): Promise<void> {
-  const watchlist = getWatchlist(env);
-  const cryptoList = getCryptoWatchlist(env);
+  // ── Tracked instruments ──
+  const TRACKED_INDICES = ['^GSPC', '^IXIC', '^DJI'];
+  const TRACKED_COMMODITIES = ['GC=F', 'CL=F'];
+  const TRACKED_CRYPTO = ['bitcoin'];
 
-  const [stockQuotes, cryptoPrices, indices] = await Promise.all([
-    yahooFinance.getMultipleQuotes(watchlist),
-    coingecko.getCryptoPrices(cryptoList),
+  // Get open holdings so we include their symbols too
+  const openTrades = env.DB ? await getOpenTrades(env.DB) : [];
+  const holdingSymbols = [...new Set(openTrades.filter(t => t.side === 'BUY').map(t => t.symbol))];
+
+  // Fetch data for tracked investments only
+  const quotesToFetch = [...new Set([...TRACKED_COMMODITIES, ...holdingSymbols])];
+
+  const [trackedQuotes, cryptoPrices, indices] = await Promise.all([
+    quotesToFetch.length > 0 ? yahooFinance.getMultipleQuotes(quotesToFetch) : Promise.resolve([]),
+    coingecko.getCryptoPrices(TRACKED_CRYPTO),
     yahooFinance.getMarketIndices(),
   ]);
-
-  const sorted = [...stockQuotes].sort((a, b) => b.changePercent - a.changePercent);
 
   const lines: string[] = [
     `📋 <b>YMSA Evening Summary</b>`,
     `━━━━━━━━━━━━━━━━━━━━━━`,
   ];
 
-  // Market indices
-  if (indices.length > 0) {
-    lines.push(``, `📊 <b>Indices:</b>`);
-    for (const idx of indices) {
+  // Market indices (S&P 500, NASDAQ, DOW JONES)
+  const trackedIndices = indices.filter(idx => TRACKED_INDICES.includes(idx.symbol));
+  if (trackedIndices.length > 0) {
+    lines.push(``, `📊 <b>Market Indices:</b>`);
+    for (const idx of trackedIndices) {
       const emoji = idx.changePercent >= 0 ? '🟢' : '🔴';
-      lines.push(`  ${emoji} <b>${idx.symbol}</b>: ${idx.price.toLocaleString()} (${idx.changePercent >= 0 ? '+' : ''}${idx.changePercent.toFixed(2)}%)`);
+      const name = idx.symbol === '^GSPC' ? 'S&P 500' : idx.symbol === '^IXIC' ? 'NASDAQ' : idx.symbol === '^DJI' ? 'DOW JONES' : idx.symbol;
+      lines.push(`  ${emoji} <b>${name}</b>: ${idx.price.toLocaleString()} (${idx.changePercent >= 0 ? '+' : ''}${idx.changePercent.toFixed(2)}%)`);
     }
   }
 
-  // Stock performance
-  lines.push(``, `📊 <b>Watchlist:</b>`);
-  for (const q of sorted) {
-    const emoji = q.changePercent >= 0 ? '🟢' : '🔴';
-    lines.push(`  ${emoji} <b>${q.symbol}</b>: $${q.price.toFixed(2)} (${q.changePercent >= 0 ? '+' : ''}${q.changePercent.toFixed(2)}%)`);
+  // Gold & Oil
+  const commodityQuotes = trackedQuotes.filter(q => TRACKED_COMMODITIES.includes(q.symbol));
+  if (commodityQuotes.length > 0) {
+    lines.push(``, `🛢️ <b>Commodities:</b>`);
+    for (const q of commodityQuotes) {
+      const emoji = q.changePercent >= 0 ? '🟢' : '🔴';
+      const name = q.symbol === 'GC=F' ? 'GOLD' : q.symbol === 'CL=F' ? 'Oil (WTI)' : q.symbol;
+      lines.push(`  ${emoji} <b>${name}</b>: $${q.price.toFixed(2)} (${q.changePercent >= 0 ? '+' : ''}${q.changePercent.toFixed(2)}%)`);
+    }
   }
 
-  if (sorted.length >= 2) {
-    lines.push(``);
-    lines.push(`🏆 <b>Top:</b> ${sorted[0].symbol} (+${sorted[0].changePercent.toFixed(2)}%)`);
-    lines.push(`📉 <b>Bottom:</b> ${sorted[sorted.length - 1].symbol} (${sorted[sorted.length - 1].changePercent.toFixed(2)}%)`);
-  }
-
-  // Crypto recap
+  // Bitcoin
   if (cryptoPrices.length > 0) {
-    lines.push(``, `🪙 <b>Crypto:</b>`);
+    lines.push(``, `₿ <b>Bitcoin:</b>`);
     for (const c of cryptoPrices) {
       const emoji = c.priceChange24h >= 0 ? '📈' : '📉';
-      lines.push(`  ${emoji} <b>${c.symbol}</b>: $${c.price.toLocaleString()} (${c.priceChange24h >= 0 ? '+' : ''}${c.priceChange24h.toFixed(1)}%)`);
+      lines.push(`  ${emoji} <b>BTC</b>: $${c.price.toLocaleString()} (${c.priceChange24h >= 0 ? '+' : ''}${c.priceChange24h.toFixed(1)}%)`);
+    }
+  }
+
+  // ── Holdings Report ──
+  if (openTrades.length > 0) {
+    const holdingQuoteMap = new Map(trackedQuotes.map(q => [q.symbol, q]));
+
+    lines.push(``, `💼 <b>Holdings Summary:</b>`);
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━━`);
+
+    let totalDailyPnl = 0;
+    let totalAccPnl = 0;
+
+    for (const trade of openTrades) {
+      if (trade.side !== 'BUY') continue;
+      const quote = holdingQuoteMap.get(trade.symbol);
+      const closingPrice = quote ? quote.price : 0;
+      const entryPrice = trade.entry_price;
+      const qty = trade.qty;
+      const tradeDate = new Date(trade.opened_at).toISOString().slice(0, 10);
+
+      // Daily P/L: today's change * qty
+      const dailyPnl = quote ? (quote.changePercent / 100) * closingPrice * qty : 0;
+      // Accumulated P/L: (current - entry) * qty
+      const accPnl = (closingPrice - entryPrice) * qty;
+
+      totalDailyPnl += dailyPnl;
+      totalAccPnl += accPnl;
+
+      const dailyEmoji = dailyPnl >= 0 ? '🟢' : '🔴';
+      const accEmoji = accPnl >= 0 ? '🟢' : '🔴';
+
+      lines.push(``);
+      lines.push(`  <b>${trade.symbol}</b>`);
+      lines.push(`  Closing: $${closingPrice.toFixed(2)} | Entry: $${entryPrice.toFixed(2)}`);
+      lines.push(`  Date: ${tradeDate} | Qty: ${qty}`);
+      lines.push(`  ${dailyEmoji} Daily P/L: $${dailyPnl >= 0 ? '+' : ''}${dailyPnl.toFixed(2)}`);
+      lines.push(`  ${accEmoji} Accum P/L: $${accPnl >= 0 ? '+' : ''}${accPnl.toFixed(2)} (${((accPnl / (entryPrice * qty)) * 100).toFixed(1)}%)`);
+    }
+
+    if (openTrades.filter(t => t.side === 'BUY').length > 1) {
+      lines.push(``);
+      lines.push(`  ─────────────────`);
+      const tDailyEmoji = totalDailyPnl >= 0 ? '🟢' : '🔴';
+      const tAccEmoji = totalAccPnl >= 0 ? '🟢' : '🔴';
+      lines.push(`  ${tDailyEmoji} <b>Total Daily P/L:</b> $${totalDailyPnl >= 0 ? '+' : ''}${totalDailyPnl.toFixed(2)}`);
+      lines.push(`  ${tAccEmoji} <b>Total Accum P/L:</b> $${totalAccPnl >= 0 ? '+' : ''}${totalAccPnl.toFixed(2)}`);
     }
   }
 
@@ -844,7 +886,7 @@ async function runQuickPulse(env: Env): Promise<void> {
       if (smc.score >= 70) {
         const indicators = computeIndicators(symbol, ohlcv);
         const atr = indicators.find(i => i.indicator === 'ATR')?.value ?? null;
-        pushSmartMoney(smc, quote, atr);
+        pushSmartMoney(smc, quote, atr, indicators);
       }
     } catch (err) {
       console.error(`[Pulse] ${symbol} error:`, err);
@@ -940,7 +982,7 @@ async function runSmartMoneyScan(env: Env): Promise<void> {
         // Push to broker manager instead of direct Telegram send
         const indicators = computeIndicators(symbol, ohlcv);
         const atr = indicators.find(i => i.indicator === 'ATR')?.value ?? null;
-        pushSmartMoney(smc, quote, atr);
+        pushSmartMoney(smc, quote, atr, indicators);
 
         if (smc.score >= 75 && smc.overallBias !== 'NEUTRAL') {
           signals.push({
