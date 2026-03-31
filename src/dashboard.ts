@@ -914,7 +914,7 @@ body{font-family:'Google Sans',sans-serif;background:#0D1117;color:#E6EDF3;min-h
   <p>6-Engine Trading Intelligence<br>Sign in with your authorized Google account</p>
   <div class="g-signin">
     <div id="g_id_onload"
-      data-client_id=""
+      data-client_id="121161777538-sm5bar8ufps6jtvll243rk29c9ppvrc0.apps.googleusercontent.com"
       data-callback="handleCredentialResponse"
       data-auto_prompt="false">
     </div>

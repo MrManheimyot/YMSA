@@ -43,7 +43,7 @@ FIBO_EXTENSIONS = "1.272,1.618,2.618"
 ALERT_PROXIMITY_52W = "0.05"
 VOLUME_SPIKE_MULTIPLIER = "1.5"
 CRYPTO_WATCHLIST = "bitcoin,ethereum,solana,cardano,polkadot"
-GOOGLE_CLIENT_ID = ""
+GOOGLE_CLIENT_ID = "121161777538-sm5bar8ufps6jtvll243rk29c9ppvrc0.apps.googleusercontent.com"
 
 # ─── KV Namespaces ───────────────────────────────────────────
 [[kv_namespaces]]
