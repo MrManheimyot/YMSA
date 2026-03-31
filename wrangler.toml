@@ -80,6 +80,8 @@ database_id = "fbc9947c-7654-43d2-9cc9-e949baa60d05"
 # wrangler secret put TELEGRAM_CHAT_ID
 # wrangler secret put ALPACA_API_KEY
 # wrangler secret put ALPACA_SECRET_KEY
+# wrangler secret put ALPACA_API_KEY
+# wrangler secret put ALPACA_SECRET_KEY
 # wrangler secret put YMSA_API_KEY
 
 # ─── Browser Rendering (Playwright for Finviz/Google scraping)

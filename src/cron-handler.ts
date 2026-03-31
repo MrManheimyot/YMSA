@@ -12,7 +12,7 @@ import * as fred from './api/fred';
 import { calculateFibonacci } from './analysis/fibonacci';
 import { detectSignals } from './analysis/signals';
 import { computeIndicators } from './analysis/indicators';
-import { sendTelegramAlert, sendDailyBriefing, sendTelegramMessage } from './alert-router';
+import { sendDailyBriefing, sendTelegramMessage } from './alert-router';
 import { scanPairs, findTradablePairs, formatPairAlert } from './agents/pairs-trading';
 import { scrapeOversoldStocks, scrape52WeekHighs, formatFinvizAlert } from './scrapers/finviz';
 import { scrapeMarketOverview, formatMarketOverview } from './scrapers/google-finance';
@@ -24,7 +24,8 @@ import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEn
 import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
 import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
 import { insertRiskEvent, generateId } from './db/queries';
-import { formatSmartMoneyTradeAlert, formatMTFTradeAlert, setCurrentRegime } from './alert-formatter';
+import { setCurrentRegime } from './alert-formatter';
+import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, sendRiskAlert, sendExecutionAlert } from './broker-manager';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -241,6 +242,7 @@ async function runMorningBriefing(env: Env): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 async function runQuickScan(env: Env): Promise<void> {
+  beginCycle();
   const watchlist = getWatchlist(env);
 
   for (const symbol of watchlist) {
@@ -256,9 +258,11 @@ async function runQuickScan(env: Env): Promise<void> {
     const criticalSignals = signals.filter((s) => s.priority === 'CRITICAL');
 
     if (criticalSignals.length > 0) {
-      await sendTelegramAlert(criticalSignals, quote, indicators, null, env);
+      pushTechnical(criticalSignals, quote, indicators, null);
     }
   }
+
+  await flushCycle(env);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -267,6 +271,9 @@ async function runQuickScan(env: Env): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 async function runFullScan(env: Env, label: string): Promise<void> {
+  // ── Broker Manager: begin cycle (collect all, decide once) ──
+  beginCycle();
+
   // ── v3: Detect Market Regime First ──
   await runRegimeScan(env);
 
@@ -297,7 +304,9 @@ async function runFullScan(env: Env, label: string): Promise<void> {
   // ── Scrapers (Finviz/Google Finance) ──
   await runScraperScan(env);
 
-  console.log(`[Cron] ${label}: Full multi-agent scan complete`);
+  // ── Broker Manager: decide and send ──
+  const sent = await flushCycle(env);
+  console.log(`[Cron] ${label}: Full scan complete — Broker sent ${sent} messages`);
 }
 
 async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
@@ -318,26 +327,27 @@ async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
 
     const importantSignals = signals.filter((s) => s.priority === 'CRITICAL' || s.priority === 'IMPORTANT');
     if (importantSignals.length > 0) {
-      await sendTelegramAlert(importantSignals, quote, indicators, fibonacci, env);
+      // Push to broker manager instead of direct Telegram send
+      pushTechnical(importantSignals, quote, indicators, fibonacci);
       totalSignals += importantSignals.length;
     }
   }
 
-  // 52-Week analysis
+  // 52-Week analysis → push as context, not separate messages
   for (const symbol of watchlist) {
     const analysis = await yahooFinance.getQuoteWith52WeekAnalysis(symbol);
     if (!analysis) continue;
     if (analysis.nearHigh || analysis.nearLow || analysis.atNewHigh || analysis.atNewLow) {
-      const msg = analysis.atNewHigh ? `🚀 <b>${symbol} NEW 52-WEEK HIGH!</b> $${analysis.quote.price.toFixed(2)}`
-        : analysis.atNewLow ? `⚠️ <b>${symbol} NEW 52-WEEK LOW!</b> $${analysis.quote.price.toFixed(2)}`
-        : analysis.nearHigh ? `📈 <b>${symbol} near 52W high</b> ($${analysis.quote.price.toFixed(2)}) — ${(analysis.position52w * 100).toFixed(0)}% of range`
-        : `📉 <b>${symbol} near 52W low</b> ($${analysis.quote.price.toFixed(2)}) — ${(analysis.position52w * 100).toFixed(0)}% of range`;
-      await sendTelegramMessage(msg, env);
+      const label52 = analysis.atNewHigh ? `🚀 ${symbol} NEW 52W HIGH $${analysis.quote.price.toFixed(2)}`
+        : analysis.atNewLow ? `⚠️ ${symbol} NEW 52W LOW $${analysis.quote.price.toFixed(2)}`
+        : analysis.nearHigh ? `📈 ${symbol} near 52W high (${(analysis.position52w * 100).toFixed(0)}%)`
+        : `📉 ${symbol} near 52W low (${(analysis.position52w * 100).toFixed(0)}%)`;
+      addContext(label52);
     }
   }
 
   if (totalSignals > 0) {
-    console.log(`[Agent1] ${label}: ${totalSignals} technical signals sent`);
+    console.log(`[Agent1] ${label}: ${totalSignals} technical signals pushed to broker`);
   }
 }
 
@@ -700,23 +710,23 @@ async function runScraperScan(env: Env): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 async function runOpeningRangeBreak(env: Env): Promise<void> {
+  beginCycle();
   const tier1 = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map(s => s.trim());
   const signals: ExecutableSignal[] = [];
 
   // Detect market regime first
   const regime = await detectRegime(env);
   if (regime) {
-    await sendTelegramMessage(formatRegimeAlert(regime), env);
+    setCurrentRegime(regime);
+    setRegime(regime);
+    addContext(formatRegimeAlert(regime));
   }
 
   for (const symbol of tier1.slice(0, 5)) { // limit to avoid rate limits
     try {
       const mtf = await analyzeMultiTimeframe(symbol, env);
       if (mtf && mtf.confluence >= 70) {
-        const alertMsg = formatMTFTradeAlert(mtf);
-        if (alertMsg) {
-          await sendTelegramMessage(alertMsg, env);
-        }
+        pushMTF(mtf);
 
         const quote = await yahooFinance.getQuote(symbol);
         if (quote) {
@@ -739,10 +749,12 @@ async function runOpeningRangeBreak(env: Env): Promise<void> {
   // Execute batch if any signals found
   if (signals.length > 0) {
     const results = await executeBatch(signals, env);
-    await sendTelegramMessage(formatBatchResults(results), env);
+    await sendExecutionAlert(formatBatchResults(results), env);
   }
 
-  console.log(`[v3] Opening Range Break: ${signals.length} signals from ${tier1.length} symbols`);
+  // Broker manager decides what trade alerts to send
+  const sent = await flushCycle(env);
+  console.log(`[v3] Opening Range Break: ${signals.length} signals, Broker sent ${sent} messages`);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -751,6 +763,7 @@ async function runOpeningRangeBreak(env: Env): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 async function runQuickPulse(env: Env): Promise<void> {
+  beginCycle();
   const watchlist = getWatchlist(env);
 
   for (const symbol of watchlist.slice(0, 3)) { // rate limit: only top 3
@@ -765,15 +778,15 @@ async function runQuickPulse(env: Env): Promise<void> {
 
       if (smc.score >= 70) {
         const indicators = computeIndicators(symbol, ohlcv);
-        const alertMsg = formatSmartMoneyTradeAlert(smc, quote, indicators);
-        if (alertMsg) {
-          await sendTelegramMessage(alertMsg, env);
-        }
+        const atr = indicators.find(i => i.indicator === 'ATR')?.value ?? null;
+        pushSmartMoney(smc, quote, atr);
       }
     } catch (err) {
       console.error(`[Pulse] ${symbol} error:`, err);
     }
   }
+
+  await flushCycle(env);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -785,7 +798,9 @@ async function runRegimeScan(env: Env): Promise<void> {
     const regime = await detectRegime(env);
     if (regime) {
       setCurrentRegime(regime);
-      await sendTelegramMessage(formatRegimeAlert(regime), env);
+      // Push to broker manager instead of direct Telegram
+      setRegime(regime);
+      addContext(formatRegimeAlert(regime));
       const adjustments = getEngineAdjustments(regime);
       console.log(`[v3] Regime: ${regime.regime} | Adjustments: ${JSON.stringify(adjustments)}`);
     }
@@ -807,11 +822,8 @@ async function runMTFScan(env: Env): Promise<void> {
     try {
       const mtf = await analyzeMultiTimeframe(symbol, env);
       if (mtf && mtf.confluence >= 65) {
-        // Use new actionable trade alert format
-        const alertMsg = formatMTFTradeAlert(mtf);
-        if (alertMsg) {
-          await sendTelegramMessage(alertMsg, env);
-        }
+        // Push to broker manager instead of direct Telegram send
+        pushMTF(mtf);
 
         if (mtf.confluence >= 70) {
           const quote = await yahooFinance.getQuote(symbol);
@@ -835,7 +847,7 @@ async function runMTFScan(env: Env): Promise<void> {
 
   if (signals.length > 0) {
     const results = await executeBatch(signals, env);
-    await sendTelegramMessage(formatBatchResults(results), env);
+    await sendExecutionAlert(formatBatchResults(results), env);
   }
 
   console.log(`[v3] MTF scan: ${signals.length} executable signals from ${tier1.length} symbols`);
@@ -860,12 +872,10 @@ async function runSmartMoneyScan(env: Env): Promise<void> {
 
       const smc = analyzeSmartMoney(symbol, candles, quote.price);
       if (smc.score >= 60) {
-        // Use new actionable trade alert format
+        // Push to broker manager instead of direct Telegram send
         const indicators = computeIndicators(symbol, ohlcv);
-        const alertMsg = formatSmartMoneyTradeAlert(smc, quote, indicators);
-        if (alertMsg) {
-          await sendTelegramMessage(alertMsg, env);
-        }
+        const atr = indicators.find(i => i.indicator === 'ATR')?.value ?? null;
+        pushSmartMoney(smc, quote, atr);
 
         if (smc.score >= 75 && smc.overallBias !== 'NEUTRAL') {
           signals.push({
@@ -886,7 +896,7 @@ async function runSmartMoneyScan(env: Env): Promise<void> {
 
   if (signals.length > 0) {
     const results = await executeBatch(signals, env);
-    await sendTelegramMessage(formatBatchResults(results), env);
+    await sendExecutionAlert(formatBatchResults(results), env);
   }
 
   console.log(`[v3] Smart Money scan: ${signals.length} executable signals`);
@@ -929,7 +939,7 @@ async function runMiddayRebalance(env: Env): Promise<void> {
     const ks = evaluateKillSwitch(snapshot.dailyPnlPct);
     if (ks.level !== 'NONE') {
       const riskMsg = formatRiskEvent('KILL_SWITCH', 'CRITICAL', `Daily PnL: ${snapshot.dailyPnlPct.toFixed(2)}%`, ks.action);
-      await sendTelegramMessage(riskMsg, env);
+      await sendRiskAlert(riskMsg, env);
 
       if (env.DB) {
         await insertRiskEvent(env.DB, generateId('risk'), 'KILL_SWITCH', 'CRITICAL', `Daily PnL: ${snapshot.dailyPnlPct.toFixed(2)}%`, ks.action);
