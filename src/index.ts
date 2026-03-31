@@ -17,7 +17,8 @@ import { detectSignals, calculateSignalScore } from './analysis/signals';
 import { detectRegime } from './analysis/regime';
 import { renderDashboard, getSystemStatus } from './dashboard';
 import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
-import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents } from './db/queries';
+import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory } from './db/queries';
+import { fetchGoogleAlerts, storeNewsAlerts, getFeedConfig } from './api/google-alerts';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -272,6 +273,35 @@ export default {
         return jsonResponse({ events, count: events.length });
       }
 
+      // ─── Google Alerts News ────────────────────────
+      if (path === '/api/news') {
+        const category = url.searchParams.get('category');
+        const limit = parseInt(url.searchParams.get('limit') || '30', 10);
+        const fresh = url.searchParams.get('fresh') === 'true';
+
+        // Optionally fetch live from RSS feeds
+        if (fresh) {
+          try {
+            const liveNews = await fetchGoogleAlerts();
+            if (liveNews.length > 0 && env.DB) {
+              await storeNewsAlerts(liveNews, env.DB);
+            }
+          } catch {}
+        }
+
+        // Return from D1 (cached)
+        if (env.DB) {
+          const alerts = category
+            ? await getNewsAlertsByCategory(env.DB, category, limit)
+            : await getRecentNewsAlerts(env.DB, limit);
+          return jsonResponse({ alerts, count: alerts.length, feeds: getFeedConfig().map(f => ({ id: f.id, name: f.name, engines: f.engines })) });
+        }
+
+        // No D1 — fetch live
+        const liveNews = await fetchGoogleAlerts();
+        return jsonResponse({ alerts: liveNews.slice(0, limit), count: liveNews.length, live: true });
+      }
+
       // ─── 404 ───────────────────────────────────────
       return jsonResponse({
         error: 'Not found',
@@ -296,6 +326,7 @@ export default {
           'GET /api/signals?limit=50',
           'GET /api/regime',
           'GET /api/risk-events',
+          'GET /api/news?category=&limit=30&fresh=true',
           'GET /api/test-alert',
           'GET /api/trigger?job=morning|open|opening_range|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
         ],

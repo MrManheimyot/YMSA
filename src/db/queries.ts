@@ -270,6 +270,30 @@ export async function getRecentRiskEvents(db: D1Database, limit: number = 20): P
   }>;
 }
 
+// ─── News Alerts Queries ─────────────────────────────────────
+
+export async function getRecentNewsAlerts(db: D1Database, limit: number = 30): Promise<Array<{
+  id: string; category: string; title: string; url: string; published_at: number; processed: number;
+}>> {
+  const result = await db.prepare(
+    `SELECT * FROM news_alerts ORDER BY published_at DESC LIMIT ?`
+  ).bind(limit).all();
+  return (result.results || []) as unknown as Array<{
+    id: string; category: string; title: string; url: string; published_at: number; processed: number;
+  }>;
+}
+
+export async function getNewsAlertsByCategory(db: D1Database, category: string, limit: number = 20): Promise<Array<{
+  id: string; category: string; title: string; url: string; published_at: number; processed: number;
+}>> {
+  const result = await db.prepare(
+    `SELECT * FROM news_alerts WHERE category = ? ORDER BY published_at DESC LIMIT ?`
+  ).bind(category, limit).all();
+  return (result.results || []) as unknown as Array<{
+    id: string; category: string; title: string; url: string; published_at: number; processed: number;
+  }>;
+}
+
 // ─── Utility ─────────────────────────────────────────────────
 
 export function generateId(prefix: string): string {

@@ -213,6 +213,21 @@ async function runMorningBriefing(env: Env): Promise<void> {
     }
   }
 
+  // ── Google Alerts ──
+  try {
+    const newsAlerts = await fetchGoogleAlerts();
+    if (newsAlerts.length > 0) {
+      if (env.DB) await storeNewsAlerts(newsAlerts, env.DB);
+      const recent = newsAlerts.filter(n => Date.now() - new Date(n.published).getTime() < 24 * 60 * 60 * 1000);
+      if (recent.length > 0) {
+        lines.push(``, `🔔 <b>Google Alerts (${recent.length} new):</b>`);
+        for (const alert of recent.slice(0, 5)) {
+          lines.push(`  • [${alert.category}] ${alert.title.slice(0, 70)}${alert.title.length > 70 ? '...' : ''}`);
+        }
+      }
+    }
+  } catch {}
+
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
   lines.push(`🎯 <i>Have a profitable day!</i>`);
 
@@ -250,8 +265,17 @@ async function runQuickScan(env: Env): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 async function runFullScan(env: Env, label: string): Promise<void> {
+  // ── v3: Detect Market Regime First ──
+  await runRegimeScan(env);
+
   // ── Agent 1: Stock Technical Scan ──
   await runStockTechnicalScan(env, label);
+
+  // ── v3 Engine 1: Multi-Timeframe Momentum ──
+  await runMTFScan(env);
+
+  // ── v3 Engine 2: Smart Money Concepts ──
+  await runSmartMoneyScan(env);
 
   // ── Agent 2: Statistical Arbitrage / Pairs Scan ──
   await runPairsScan(env);
@@ -264,6 +288,9 @@ async function runFullScan(env: Env, label: string): Promise<void> {
 
   // ── Agent 5: Commodity + Macro Scan ──
   await runCommodityScan(env);
+
+  // ── v3: Google Alerts News Scan ──
+  await runNewsScan(env);
 
   // ── Scrapers (Finviz/Google Finance) ──
   await runScraperScan(env);
@@ -450,6 +477,21 @@ async function runEveningSummary(env: Env): Promise<void> {
       lines.push(`  ${emoji} <b>${c.symbol}</b>: $${c.price.toLocaleString()} (${c.priceChange24h >= 0 ? '+' : ''}${c.priceChange24h.toFixed(1)}%)`);
     }
   }
+
+  // Google Alerts digest
+  try {
+    const newsAlerts = await fetchGoogleAlerts();
+    if (newsAlerts.length > 0) {
+      if (env.DB) await storeNewsAlerts(newsAlerts, env.DB);
+      const recent = newsAlerts.filter(n => Date.now() - new Date(n.published).getTime() < 12 * 60 * 60 * 1000);
+      if (recent.length > 0) {
+        lines.push(``, `🔔 <b>Today's Google Alerts (${recent.length}):</b>`);
+        for (const alert of recent.slice(0, 8)) {
+          lines.push(`  • [${alert.category}] ${alert.title.slice(0, 70)}${alert.title.length > 70 ? '...' : ''}`);
+        }
+      }
+    }
+  } catch {}
 
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
   lines.push(`🌙 <i>See you tomorrow!</i>`);
@@ -720,6 +762,135 @@ async function runQuickPulse(env: Env): Promise<void> {
     } catch (err) {
       console.error(`[Pulse] ${symbol} error:`, err);
     }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: REGIME SCAN — Detect market regime and store history
+// ═══════════════════════════════════════════════════════════════
+
+async function runRegimeScan(env: Env): Promise<void> {
+  try {
+    const regime = await detectRegime(env);
+    if (regime) {
+      await sendTelegramMessage(formatRegimeAlert(regime), env);
+      const adjustments = getEngineAdjustments(regime);
+      console.log(`[v3] Regime: ${regime.regime} | Adjustments: ${JSON.stringify(adjustments)}`);
+    }
+  } catch (err) {
+    console.error('[v3] Regime scan error:', err);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: MTF SCAN — Multi-Timeframe Momentum (Engine 1)
+// Scans Tier 1 watchlist for MTF confluence signals
+// ═══════════════════════════════════════════════════════════════
+
+async function runMTFScan(env: Env): Promise<void> {
+  const tier1 = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map(s => s.trim());
+  const signals: ExecutableSignal[] = [];
+
+  for (const symbol of tier1.slice(0, 8)) { // rate limit aware
+    try {
+      const mtf = await analyzeMultiTimeframe(symbol, env);
+      if (mtf && mtf.confluence >= 65) {
+        await sendTelegramMessage(formatMTFAlert(mtf), env);
+
+        if (mtf.confluence >= 70) {
+          const quote = await yahooFinance.getQuote(symbol);
+          if (quote) {
+            signals.push({
+              engineId: 'MTF_MOMENTUM',
+              symbol,
+              direction: mtf.suggestedAction === 'WAIT' ? 'BUY' : mtf.suggestedAction,
+              strength: mtf.confluence,
+              signalType: mtf.suggestedAction === 'BUY' ? 'MTF_CONFLUENCE_BUY' : 'MTF_CONFLUENCE_SELL',
+              entryPrice: quote.price,
+              atr: quote.price * 0.02,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error(`[MTF] ${symbol} error:`, err);
+    }
+  }
+
+  if (signals.length > 0) {
+    const results = await executeBatch(signals, env);
+    await sendTelegramMessage(formatBatchResults(results), env);
+  }
+
+  console.log(`[v3] MTF scan: ${signals.length} executable signals from ${tier1.length} symbols`);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: SMART MONEY SCAN — Order Blocks, FVGs, Sweeps (Engine 2)
+// ═══════════════════════════════════════════════════════════════
+
+async function runSmartMoneyScan(env: Env): Promise<void> {
+  const tier1 = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map(s => s.trim());
+  const signals: ExecutableSignal[] = [];
+
+  for (const symbol of tier1.slice(0, 8)) {
+    try {
+      const ohlcv = await yahooFinance.getOHLCV(symbol, '3mo', '1d');
+      if (ohlcv.length < 20) continue;
+
+      const candles = ohlcv.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, timestamp: c.timestamp }));
+      const quote = await yahooFinance.getQuote(symbol);
+      if (!quote) continue;
+
+      const smc = analyzeSmartMoney(symbol, candles, quote.price);
+      if (smc.score >= 60) {
+        await sendTelegramMessage(formatSmartMoneyAlert(smc), env);
+
+        if (smc.score >= 75 && smc.overallBias !== 'NEUTRAL') {
+          signals.push({
+            engineId: 'SMART_MONEY',
+            symbol,
+            direction: smc.overallBias === 'BULLISH' ? 'BUY' : 'SELL',
+            strength: smc.score,
+            signalType: smc.signals[0]?.type === 'ORDER_BLOCK' ? 'ORDER_BLOCK' : smc.signals[0]?.type === 'FVG' ? 'FAIR_VALUE_GAP' : 'LIQUIDITY_SWEEP',
+            entryPrice: quote.price,
+            atr: quote.price * 0.02,
+          });
+        }
+      }
+    } catch (err) {
+      console.error(`[SMC] ${symbol} error:`, err);
+    }
+  }
+
+  if (signals.length > 0) {
+    const results = await executeBatch(signals, env);
+    await sendTelegramMessage(formatBatchResults(results), env);
+  }
+
+  console.log(`[v3] Smart Money scan: ${signals.length} executable signals`);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3: NEWS SCAN — Fetch Google Alerts RSS, store, and digest
+// ═══════════════════════════════════════════════════════════════
+
+async function runNewsScan(env: Env): Promise<void> {
+  try {
+    const news = await fetchGoogleAlerts();
+    if (news.length > 0) {
+      if (env.DB) {
+        const inserted = await storeNewsAlerts(news, env.DB);
+        console.log(`[v3] News scan: stored ${inserted} new alerts from ${news.length} fetched`);
+      }
+      // Only alert if there are recent items (< 6 hours old)
+      const recent = news.filter(n => Date.now() - new Date(n.published).getTime() < 6 * 60 * 60 * 1000);
+      if (recent.length > 0) {
+        await sendTelegramMessage(formatNewsDigest(recent, 5), env);
+      }
+    }
+  } catch (err) {
+    console.error('[v3] News scan error:', err);
   }
 }
 

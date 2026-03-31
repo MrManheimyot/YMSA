@@ -101,6 +101,7 @@ export function getSystemStatus(env: Env): SystemStatus {
       'GET /api/trades?status=open&limit=20',
       'GET /api/d1-positions', 'GET /api/signals?limit=50',
       'GET /api/regime', 'GET /api/risk-events',
+      'GET /api/news?category=&limit=30&fresh=true',
       'GET /api/test-alert',
       'GET /api/trigger?job=morning|open|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
     ],
@@ -368,6 +369,22 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
     </div>
   </div>
 
+  <!-- ═══ GOOGLE ALERTS NEWS FEED ═══ -->
+  <div class="section">
+    <div class="section-hdr">📰 Google Alerts News Feed <span id="news-count" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px"></span>
+      <button class="test-btn" style="margin-left:auto;font-size:10px;padding:3px 10px" onclick="refreshNews()">⟳ Refresh</button>
+    </div>
+    <div class="two-col">
+      <div class="card scroll-panel" id="news-panel" style="max-height:400px"><div class="loading">Loading news...</div></div>
+      <div class="card">
+        <div class="card-title">Feed Categories</div>
+        <div id="news-feeds" style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px"></div>
+        <div class="card-title" style="margin-top:14px">Engine Mapping</div>
+        <div id="news-engine-map" style="margin-top:4px;font-size:11px;color:var(--c-on-surface-2)"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ═══ CRON + APIS ═══ -->
   <div class="two-col">
     <div class="section">
@@ -478,7 +495,7 @@ function safeFetch(path) { return fetch(BASE + path).then(r => r.ok ? r.json() :
 
 // ─── Main Load ───────────────────────────────────
 async function loadDashboard() {
-  const [status, portfolio, regime, signals, trades, riskEvents, positions] = await Promise.all([
+  const [status, portfolio, regime, signals, trades, riskEvents, positions, news] = await Promise.all([
     safeFetch('/api/system-status'),
     safeFetch('/api/portfolio'),
     safeFetch('/api/regime'),
@@ -486,6 +503,7 @@ async function loadDashboard() {
     safeFetch('/api/trades?limit=15'),
     safeFetch('/api/risk-events'),
     safeFetch('/api/positions'),
+    safeFetch('/api/news?limit=30'),
   ]);
 
   if (status) renderStatus(status);
@@ -495,6 +513,7 @@ async function loadDashboard() {
   renderTrades(trades);
   renderRiskEvents(riskEvents);
   renderPositions(positions);
+  renderNews(news);
   $('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
@@ -711,6 +730,71 @@ function renderTrades(data) {
       <td class="mono" style="font-size:10px">\${ts(t.opened_at)}</td>
     </tr>\`;
   }).join('');
+}
+
+// ─── News Feed ───────────────────────────────────
+const FEED_COLORS = {
+  'mega-tech':'#80CBC4','more-tech':'#80CBC4','banks':'#80CBC4','semis':'#FFB74D',
+  'mna':'#CE93D8','short-squeeze':'#EF5350','fed-rates':'#42A5F5','earnings':'#66BB6A',
+  'sec-13f':'#FFA726','crypto':'#AB47BC','buybacks':'#26A69A','crash-signals':'#F44336'
+};
+function renderNews(data) {
+  const alerts = data?.alerts || [];
+  const feeds = data?.feeds || [];
+  $('news-count').textContent = alerts.length ? '(' + alerts.length + ')' : '';
+
+  const panel = $('news-panel');
+  if (!alerts.length) {
+    panel.innerHTML = '<div class="empty">No news alerts yet — trigger a midday or overnight scan to populate</div>';
+  } else {
+    panel.innerHTML = alerts.map(a => {
+      const color = FEED_COLORS[a.category] || 'var(--c-on-surface-2)';
+      const ago = a.published_at ? ts(a.published_at) : (a.published ? new Date(a.published).toLocaleString() : '');
+      const title = (a.title || '').replace(/<[^>]*>/g, '').slice(0, 100);
+      const link = a.url || '#';
+      return \`<div style="display:flex;gap:8px;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.04);font-size:12px;align-items:flex-start">
+        <span class="mono" style="min-width:80px;color:\${color};font-size:10px;padding-top:2px">\${a.category}</span>
+        <div style="flex:1">
+          <a href="\${link}" target="_blank" rel="noopener" style="color:var(--c-on-surface);text-decoration:none">\${title}</a>
+          <div style="font-size:10px;color:var(--c-on-surface-2);margin-top:2px">\${ago}</div>
+        </div>
+      </div>\`;
+    }).join('');
+  }
+
+  // Feed categories
+  const fc = $('news-feeds');
+  if (feeds.length) {
+    fc.innerHTML = feeds.map(f => {
+      const color = FEED_COLORS[f.id] || 'var(--c-on-surface-2)';
+      return \`<span class="chip" style="border-color:\${color};color:\${color};font-size:10px;cursor:pointer" onclick="filterNews('\${f.id}')">\${f.name}</span>\`;
+    }).join('');
+  }
+
+  // Engine mapping
+  const em = $('news-engine-map');
+  if (feeds.length) {
+    const engineMap = {};
+    feeds.forEach(f => f.engines.forEach(e => {
+      if (!engineMap[e]) engineMap[e] = [];
+      engineMap[e].push(f.name);
+    }));
+    em.innerHTML = Object.entries(engineMap).map(([eng, feedNames]) =>
+      \`<div style="margin-bottom:4px"><span class="mono" style="color:var(--c-primary);font-weight:500">\${eng}</span>: \${feedNames.join(', ')}</div>\`
+    ).join('');
+  }
+}
+
+async function refreshNews() {
+  $('news-panel').innerHTML = '<div class="loading">Fetching fresh Google Alerts...</div>';
+  const data = await safeFetch('/api/news?limit=30&fresh=true');
+  renderNews(data);
+}
+
+async function filterNews(category) {
+  $('news-panel').innerHTML = '<div class="loading">Loading ' + category + '...</div>';
+  const data = await safeFetch('/api/news?limit=20&category=' + category);
+  renderNews(data);
 }
 
 // ─── Test Runner ─────────────────────────────────
