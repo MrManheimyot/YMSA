@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-03-27
+> Last updated: 2026-04-01 (commit bca9e2e)
 
 ---
 
@@ -11,54 +11,75 @@
 | Field | Value |
 |---|---|
 | **Name** | YMSA — Your Money, Smarter & Automated |
-| **Version** | 2.0.0 |
+| **Version** | 3.0.0 |
 | **Owner** | Yotam Manheim (`yotam.manheim@gmail.com`) |
 | **Runtime** | Cloudflare Workers (100% serverless, edge computing) |
 | **Language** | TypeScript (strict mode) |
 | **Framework** | Hono v4.7 (HTTP router on Workers) |
-| **Mode** | **SIGNALS-ONLY** — No automated execution. All trading is manual. |
-| **Output** | Telegram bot alerts → Yotam's phone → Manual trade decisions |
+| **Mode** | **AUTONOMOUS PAPER TRADING** — 6-engine pipeline, Alpaca paper mode, with Telegram alerts |
+| **AI Engine** | Z.AI — Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct`) |
+| **Database** | D1 (`ymsa-db`) — 10 tables for trades, signals, positions, P&L, regime, risk events |
+| **Output** | Telegram bot alerts → Yotam's phone → Manual override if needed |
 | **Local OS** | Windows 11 |
-| **Local Path** | `d:\Users\yotam\Downloads\YMSA` |
+| **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
+| **Worker URL** | `https://ymsa-financial-automation.kuki-25d.workers.dev` |
+| **Repo** | `MrManheimyot/YMSA` (branch: `master`) |
+| **Tests** | 43 tests (Vitest) across 3 files — signals, risk-controller, z-engine |
 
 ---
 
 ## 🏗️ Architecture Overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                  CLOUDFLARE WORKERS                      │
-│                  (Runs in the CLOUD)                     │
-│                                                         │
-│  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌──────────┐ │
-│  │ Agent 1 │  │ Agent 2 │  │ Agent 3  │  │ Agent 4  │ │
-│  │ Stocks  │  │ Stat-Arb│  │ Crypto   │  │Polymarket│ │
-│  │Technical│  │ Pairs   │  │ Whales   │  │ Bets     │ │
-│  └────┬────┘  └────┬────┘  └────┬─────┘  └────┬─────┘ │
-│       │            │            │              │        │
-│       └────────────┴─────┬──────┴──────────────┘        │
-│                          │                              │
-│  ┌──────────┐    ┌───────▼──────┐    ┌──────────────┐  │
-│  │ Agent 5  │───▶│ Orchestrator │───▶│Risk Controller│ │
-│  │Commoditi │    │  (Aggregator)│    │(Hard Rules)   │ │
-│  │ + Macro  │    └───────┬──────┘    └──────────────┘  │
-│  └──────────┘            │                              │
-│                   ┌──────▼──────┐                       │
-│                   │Alert Router │                       │
-│                   │ (Telegram)  │                       │
-│                   └──────┬──────┘                       │
-└──────────────────────────┼──────────────────────────────┘
-                           │
-                    ┌──────▼──────┐
-                    │  Telegram   │
-                    │  Bot API    │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │  📱 Yotam   │
-                    │  (Manual    │
-                    │   Trading)  │
-                    └─────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                         CLOUDFLARE WORKERS v3.0                              │
+│                                                                              │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────┐            │
+│  │  Engine 1   │  │  Engine 2   │  │  Engine 3   │  │  Engine 4   │           │
+│  │ MTF Momentum│  │ Smart Money │  │  Stat-Arb   │  │  Crypto/DEX │           │
+│  │ (W/D/4H/1H) │  │ (OB/FVG/LS) │  │  (Pairs)    │  │  (Whales)   │           │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘           │
+│         │                │                │                │                │
+│  ┌────────────┐  ┌────────────┐          │                │                │
+│  │  Engine 5   │  │  Engine 6   │          │                │                │
+│  │Event-Driven │  │  Macro/     │          │                │                │
+│  │(News/Earns) │  │  Commodities│          │                │                │
+│  └──────┬──────┘  └──────┬──────┘          │                │                │
+│         │                │                │                │                │
+│         └────────────────┴────────┬───────┴────────────────┘                │
+│                                   │                                          │
+│  ┌──────────────┐        ┌────────▼────────┐        ┌──────────────┐        │
+│  │ Market Regime │───────▶│   Broker Mgr    │◀──────│   Z.AI       │        │
+│  │  Detection    │        │ (Cycle-Based    │        │ (LLM Signal  │        │
+│  │(TAAPI + SPY)  │        │  Orchestrator)  │        │  Synthesis)  │        │
+│  └──────────────┘        └────────┬────────┘        └──────────────┘        │
+│                                   │                                          │
+│  ┌──────────────┐        ┌────────▼────────┐        ┌──────────────┐        │
+│  │Risk Controller│───────▶│  Execution Eng  │───────▶│  D1 Database │        │
+│  │(Hard Rules)   │        │  (Alpaca Paper) │        │  (10 tables) │        │
+│  └──────────────┘        └────────┬────────┘        └──────────────┘        │
+│                                   │                                          │
+│                           ┌───────▼────────┐                                │
+│                           │ Alert Formatter │                                │
+│                           │ (24hr Dedup)    │                                │
+│                           └───────┬────────┘                                │
+│                                   │                                          │
+│  ┌──────────────┐        ┌───────▼────────┐        ┌──────────────┐        │
+│  │ Google Alerts │        │  Alert Router  │        │   KV Cache   │        │
+│  │ (12 RSS feeds)│        │  (Telegram)    │        │ (TAAPI/API)  │        │
+│  └──────────────┘        └───────┬────────┘        └──────────────┘        │
+└──────────────────────────────────┼───────────────────────────────────────────┘
+                                   │
+                            ┌──────▼──────┐
+                            │  Telegram   │
+                            │  Bot API    │
+                            └──────┬──────┘
+                                   │
+                            ┌──────▼──────┐
+                            │  📱 Yotam   │
+                            │  (Override  │
+                            │   if needed) │
+                            └─────────────┘
 ```
 
 ### Key Principle
@@ -107,8 +128,8 @@
 
 ```
 YMSA/
-├── wrangler.toml                 # ⚙️ CF Worker config, cron schedules, env vars
-├── package.json                  # 📦 Dependencies: hono, wrangler, typescript
+├── wrangler.toml                 # ⚙️ CF Worker config, 12 cron schedules, D1/KV/AI/Browser bindings
+├── package.json                  # 📦 hono ^4.7, typescript ^5.7, vitest ^3.0, wrangler ^4.0
 ├── tsconfig.json                 # 🔧 TS strict mode, ES2022, CF workers types
 ├── .gitignore                    # 🔒 Ignores secrets, node_modules, .wrangler
 ├── .secrets.json                 # 🔐 REAL API keys (GITIGNORED — NEVER COMMIT)
@@ -118,49 +139,71 @@ YMSA/
 ├── set-secrets.mjs               # 🔐 Wrangler secret setter (GITIGNORED)
 ├── setup.ps1                     # 🪟 Windows PowerShell setup (git, gh, deploy)
 ├── README.md                     # 📖 User-facing readme
-│
-├── .github/workflows/
-│   └── deploy.yml                # 🤖 GitHub Actions CI/CD pipeline
+├── MEMORY-JOURNAL.md             # 🧠 THIS FILE — system memory for AI assistants
+├── _check.bat                    # 🔍 Quick audit script
 │
 ├── config/
-│   ├── watchlist.json            # 📊 10 stocks: AAPL, MSFT, NVDA, GOOGL, AMZN, META, TSLA, AMD, AVGO, CRM
+│   ├── watchlist.json            # 📊 3-tier: 15 core + 15 rotation + 9 ETFs + 6 pairs + 10 crypto
 │   ├── screening-rules.json      # 📐 13 alert trigger rules (RSI, EMA, MACD, etc.)
 │   └── alert-rules.json          # 🔔 Channels, batching, quiet hours config
 │
-├── skills/                       # 🧠 OpenClaw / LLM skill definitions
+├── skills/                       # 🧠 Copilot skill definitions
 │   ├── ymsa-fibonacci/SKILL.md
-│   ├── ymsa-stock-screener/
-│   └── ymsa-technical-analysis/
+│   ├── ymsa-stock-screener/SKILL.md
+│   └── ymsa-technical-analysis/SKILL.md
 │
 └── src/
-    ├── index.ts                  # 🚪 Main entry: HTTP router + scheduled() handler
-    ├── types.ts                  # 📝 All TypeScript interfaces (225 lines)
-    ├── cron-handler.ts           # ⏰ 7 cron job implementations (633 lines, LARGEST FILE)
-    ├── alert-router.ts           # 📨 Telegram message formatter + sender
+    ├── index.ts                  # 🚪 Hono router (20+ endpoints) + scheduled() cron handler
+    ├── types.ts                  # 📝 All TS interfaces, 31 IndicatorTypes, 14 CronJobTypes (293 lines)
+    ├── cron-handler.ts           # ⏰ 18+ cron job functions, 6-engine pipeline (1142 lines, LARGEST)
+    ├── alert-router.ts           # 📨 Telegram sender + message splitting (132 lines)
+    ├── alert-formatter.ts        # 🎨 Alert composition: Technical Info + Trade Setup (386 lines)
+    ├── broker-manager.ts         # 🧩 Cycle-based orchestrator: dedup, Z.AI batch, alert budget (590 lines)
     │
-    ├── api/                      # 🌐 External API clients (8 modules)
-    │   ├── yahoo-finance.ts      # FREE — No key needed. Quotes, OHLCV, commodities, indices
-    │   ├── alpha-vantage.ts      # KEY REQUIRED — EMA, RSI, MACD, OHLCV fallback
-    │   ├── taapi.ts              # KEY REQUIRED — 200+ technical indicators (bulk API)
-    │   ├── finnhub.ts            # KEY REQUIRED — Real-time quotes, news, earnings calendar
-    │   ├── fred.ts               # KEY REQUIRED — Macro data: GDP, CPI, unemployment, yield curve
+    ├── ai/
+    │   └── z-engine.ts           # 🤖 Z.AI: LLM signal synthesis, sentiment, trade review, weekly narrative
+    │
+    ├── api/                      # 🌐 External API clients (9 modules)
+    │   ├── yahoo-finance.ts      # FREE — Quotes, OHLCV, commodities, indices, 52W analysis
+    │   ├── alpha-vantage.ts      # KEY — EMA, RSI, MACD, OHLCV fallback
+    │   ├── taapi.ts              # KEY — 200+ technical indicators (bulk API, cached 5min)
+    │   ├── finnhub.ts            # KEY — Real-time quotes, news, earnings calendar
+    │   ├── fred.ts               # KEY — Macro: GDP, CPI, unemployment, yield curve, VIX
     │   ├── coingecko.ts          # FREE — Crypto prices, global market, trending
     │   ├── dexscreener.ts        # FREE — DEX pair data, whale activity detection
-    │   └── polymarket.ts         # FREE — Prediction markets, value bet finder
+    │   ├── polymarket.ts         # FREE — Prediction markets, value bet finder
+    │   └── google-alerts.ts      # FREE — 12 RSS feeds, engine-routed news intelligence
     │
-    ├── analysis/                 # 📐 Signal processing
+    ├── analysis/                 # 📐 Signal processing & indicator engines
+    │   ├── indicators.ts         # Local compute: RSI, EMA 50/200, SMA 50/200, MACD, ATR from OHLCV
+    │   ├── signals.ts            # Signal detection (RSI, EMA, MACD, 52W, Fib, Volume)
     │   ├── fibonacci.ts          # Fibonacci retracement/extension calculator
-    │   └── signals.ts            # Signal detection engine (RSI, EMA, MACD, 52W, Fib, Volume)
+    │   ├── multi-timeframe.ts    # MTF Engine: W/D/4H confluence, mean reversion, cached TAAPI
+    │   ├── smart-money.ts        # SMC: Order Blocks, FVGs, Liquidity Sweeps, BOS
+    │   └── regime.ts             # Market Regime: TRENDING_UP/DOWN/RANGING/VOLATILE + engine weights
     │
-    ├── agents/                   # 🤖 Multi-agent system (Phase 2, partially implemented)
-    │   ├── types.ts              # Agent types: AgentId, AgentSignal, PortfolioState, etc.
+    ├── execution/                # 🚀 Trade execution pipeline
+    │   ├── engine.ts             # Alpaca bracket orders, Kelly sizing, risk pre-flight
+    │   └── portfolio.ts          # Portfolio snapshots, Sharpe, drawdown, daily P&L recording
+    │
+    ├── db/                       # 💾 D1 database layer
+    │   ├── schema.sql            # 10 tables: trades, positions, signals, daily_pnl, etc.
+    │   └── queries.ts            # 20+ CRUD functions for all tables
+    │
+    ├── agents/                   # 🤖 Multi-agent system
+    │   ├── types.ts              # Agent types: AgentId, AgentSignal, PortfolioState
     │   ├── orchestrator.ts       # Signal aggregation + weight calibration
     │   ├── risk-controller.ts    # ⚠️ DETERMINISTIC hard rules — NOT AI (DO NOT CHANGE LIGHTLY)
-    │   └── pairs-trading.ts      # Stat-arb: correlation, z-score, cointegration proxy
+    │   └── pairs-trading.ts      # Stat-arb: correlation, z-score, cointegration, half-life
     │
-    └── scrapers/                 # 🕷️ Browser-based scrapers (requires BROWSER binding)
-        ├── finviz.ts             # RSI oversold stocks, 52W highs (Playwright)
-        └── google-finance.ts     # Market overview scraper (Playwright)
+    ├── scrapers/                 # 🕷️ Browser-based scrapers (requires BROWSER binding)
+    │   ├── finviz.ts             # RSI oversold stocks, 52W highs (Playwright)
+    │   └── google-finance.ts     # Market overview scraper (Playwright)
+    │
+    └── __tests__/                # 🧪 Vitest test suite (43 tests)
+        ├── signals.test.ts       # 7 tests: RSI, volume, 52W, score calculation
+        ├── risk-controller.test.ts # 6 tests: Kill switch, drawdown, position size, limits
+        └── z-engine.test.ts      # 30 tests: synthesize, sentiment, review, narrative, compose, availability
 ```
 
 ---
@@ -173,19 +216,27 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 | Cron Expression | UTC Time | IST Time | Job Type | Description |
 |---|---|---|---|---|
 | `0 5 * * 1-5` | 05:00 | **07:00** | `MORNING_BRIEFING` | Pre-market overview (stocks, crypto, macro, predictions) |
-| `30 14 * * 1-5` | 14:30 | **16:30** | `MARKET_OPEN_SCAN` | Full 5-agent scan at US market open |
+| `30 14 * * 1-5` | 14:30 | **16:30** | `MARKET_OPEN_SCAN` | US market open + regime detection + full 6-engine scan |
+| `45 14 * * 1-5` | 14:45 | **16:45** | `OPENING_RANGE_BREAK` | Opening range breakout momentum scan |
+| `*/5 14-21 * * 1-5` | Every 5m | — | `QUICK_PULSE_5MIN` | Ultra-fast pulse: RSI extremes + SMC + regime shifts |
 | `*/15 14-21 * * 1-5` | Every 15m | — | `QUICK_SCAN_15MIN` | RSI + MACD monitoring (CRITICAL alerts only) |
-| `0 15-21 * * 1-5` | Hourly | — | `FULL_SCAN_HOURLY` | EMA, Fibonacci, screener, all agents |
-| `0 15 * * 1-5` | 15:00 | **17:00** | `EVENING_SUMMARY` | Day recap + portfolio performance |
-| `0 18 * * 1-5` | 18:00 | **20:00** | `AFTER_HOURS_SCAN` | Earnings + company news scan |
-| `0 7 * * 0` | 07:00 | **09:00** | `WEEKLY_REVIEW` | Sunday full portfolio + macro review |
+| `0 15-21 * * 1-5` | Hourly | — | `FULL_SCAN_HOURLY` | Full 6-engine orchestration with broker cycle flush |
+| `0 18 * * 1-5` | 18:00 | **20:00** | `MIDDAY_REBALANCE` | Intraday rebalance check |
+| `0 15 * * 1-5` | 15:00 | **17:00** | `EVENING_SUMMARY` | Filtered recap: indices + commodities + BTC + holdings P/L |
+| `30 21 * * 1-5` | 21:30 | **23:30** | `AFTER_HOURS_SCAN` | Earnings + company news + overnight setup |
+| `0 7 * * SUN` | 07:00 | **09:00** | `WEEKLY_REVIEW` | Sunday full portfolio + macro + regime + performance review |
+| `0 3 * * SAT` | 03:00 | **05:00** | `ML_RETRAIN` | ML model retrain + pairs recalibration |
+| `0 0 1 * *` | 00:00 | **02:00** | `MONTHLY_PERFORMANCE` | Monthly performance report |
 
 ### Cron Implementation Flow
 1. Cloudflare triggers `scheduled()` in `index.ts`
 2. Routes to `handleCronEvent()` in `cron-handler.ts`
 3. `identifyCronJob()` maps cron string → job type
-4. Runs appropriate scan function
-5. Sends results via `alert-router.ts` → Telegram
+4. For market-hours scans: `beginCycle()` → agents push signals → `flushCycle()` batches alerts
+5. Broker Manager deduplicates (24hr per symbol), budgets alerts (max 3 trade alerts/hr)
+6. Z.AI synthesizes reasoning, composes batch alerts
+7. Alert Formatter adds Technical Info (RSI, MACD, SMA 50/200), Trade Setup, Confidence
+8. Sends via `alert-router.ts` → Telegram
 
 ---
 
@@ -193,17 +244,22 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 
 | Service | Key Name | Free? | Rate Limit | Used For |
 |---|---|---|---|---|
-| Yahoo Finance | *(no key needed)* | ✅ FREE | ~2000 req/hr | Quotes, OHLCV, commodities, indices |
-| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` | Free tier (5/min) | 5 req/min, 500/day | EMA, RSI, MACD (backup) |
-| TAAPI.io | `TAAPI_API_KEY` | Paid ($10+/mo) | Varies by plan | 200+ technical indicators (primary) |
-| Finnhub | `FINNHUB_API_KEY` | Free tier | 60 req/min | News, earnings calendar |
-| FRED | `FRED_API_KEY` | ✅ FREE | 120 req/min | Macro: GDP, CPI, yield curve, VIX |
+| Yahoo Finance | *(no key needed)* | ✅ FREE | ~2000 req/hr | Quotes, OHLCV, commodities, indices, 52W analysis |
+| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` | Free tier (5/min) | 5 req/min, 500/day | EMA, RSI, MACD (backup to local compute) |
+| TAAPI.io | `TAAPI_API_KEY` | Paid ($10+/mo) | Varies by plan | 200+ indicators, MTF bulk queries (cached 5min via KV) |
+| Finnhub | `FINNHUB_API_KEY` | Free tier | 60 req/min | News, earnings calendar, company events |
+| FRED | `FRED_API_KEY` | ✅ FREE | 120 req/min | Macro: GDP, CPI, yield curve, VIX, commodity prices |
 | CoinGecko | *(no key needed)* | ✅ FREE | 10-50 req/min | Crypto prices, market cap, trending |
 | DexScreener | *(no key needed)* | ✅ FREE | Generous | DEX pairs, whale detection |
 | Polymarket | *(no key needed)* | ✅ FREE | Generous | Prediction markets, value bets |
+| Google Alerts | *(RSS, no key)* | ✅ FREE | N/A | 12 RSS feeds for earnings, M&A, SEC filings, crash signals |
 | Telegram | `TELEGRAM_BOT_TOKEN` | ✅ FREE | 30 msg/sec | Alert delivery |
 | Telegram | `TELEGRAM_CHAT_ID` | — | — | Yotam's chat/group ID |
+| Alpaca | `ALPACA_API_KEY` | ✅ FREE | — | Paper trading execution (bracket orders) |
+| Alpaca | `ALPACA_SECRET_KEY` | — | — | Paper trading auth |
 | Cloudflare | `CLOUDFLARE_API_TOKEN` | — | — | Deployment (NOT stored in Worker) |
+| Cloudflare AI | *binding: `AI`* | ✅ FREE tier | — | Z.AI LLM: `@cf/meta/llama-3.1-8b-instruct` |
+| Google OAuth | `GOOGLE_CLIENT_ID` | ✅ FREE | — | Dashboard authentication |
 
 ### Where Secrets Live
 - **In Cloudflare Workers**: Set via `wrangler secret put <NAME>` — encrypted at rest
@@ -214,19 +270,36 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 
 ## 🌐 HTTP Endpoints (Defined in `src/index.ts`)
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| `GET` | `/` or `/health` | None | Health check + system info |
-| `GET` | `/api/quote?symbol=AAPL` | API Key | Real-time quote (Yahoo Finance) |
-| `GET` | `/api/analysis?symbol=AAPL` | API Key | Full technical analysis (RSI, EMA, MACD, Fib) |
-| `GET` | `/api/fibonacci?symbol=AAPL` | API Key | Fibonacci retracement/extension levels |
-| `GET` | `/api/scan` | API Key | Full watchlist scan with signal scoring |
-| `GET` | `/api/crypto` | API Key | Crypto dashboard (CoinGecko + DexScreener) |
-| `GET` | `/api/polymarket` | API Key | Active prediction markets + value bets |
-| `GET` | `/api/commodities` | API Key | Commodity prices + FRED macro data |
-| `GET` | `/api/indices` | API Key | Market indices (S&P500, NASDAQ, DOW, VIX) |
-| `GET` | `/api/test-alert` | API Key | Send test alert to Telegram |
-| `GET` | `/api/trigger?job=morning` | API Key | Manually trigger a cron job |
+### Public Routes (No Auth)
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/` or `/health` | Health check + system info (6 engines, watchlists, Z.AI status) |
+| `POST` | `/auth/google` | Google OAuth login (validates ID token) |
+| `POST` | `/auth/logout` | Logout (clears session) |
+| `GET` | `/auth/me` | Current user info |
+
+### Authenticated Routes (API Key or Google OAuth)
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/dashboard` | Full SRE dashboard (HTML) — metrics, sparklines, engine cards |
+| `GET` | `/api/system-status` | JSON system status for dashboard polling |
+| `GET` | `/api/quote?symbol=AAPL` | Real-time quote (Yahoo Finance) |
+| `GET` | `/api/analysis?symbol=AAPL` | Full technical analysis (indicators, Fib, signals, SMC, 52W) |
+| `GET` | `/api/fibonacci?symbol=AAPL` | Fibonacci retracement/extension levels |
+| `GET` | `/api/scan` | Full watchlist scan with signal scoring + ranking |
+| `GET` | `/api/crypto` | Crypto dashboard (CoinGecko + DexScreener whales) |
+| `GET` | `/api/polymarket` | Active prediction markets + value bets |
+| `GET` | `/api/commodities` | Commodity prices + FRED macro data |
+| `GET` | `/api/indices` | Market indices (S&P500, NASDAQ, DOW, VIX) |
+| `GET` | `/api/trades?open=true` | Trade records from D1 (open or recent) |
+| `GET` | `/api/signals?limit=20` | Recent signals from D1 |
+| `GET` | `/api/portfolio` | Portfolio snapshot (Alpaca-synced) |
+| `GET` | `/api/risk-events` | Recent risk events from D1 |
+| `GET` | `/api/news` | News alerts from D1 (filterable by category) |
+| `GET` | `/api/performance` | Engine performance metrics |
+| `GET` | `/api/daily-pnl` | Daily P&L history |
+| `GET` | `/api/test-alert` | Send test alert to Telegram |
+| `GET` | `/api/trigger?job=morning` | Manually trigger a cron job |
 
 **Auth**: Pass `X-API-Key` header or `?key=` query param. Only enforced if `YMSA_API_KEY` secret is set.
 
@@ -234,40 +307,98 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 
 ---
 
-## 🤖 The 5 Agents
+## 🤖 The 6 Engines + Support Systems
 
-### Agent 1: Stocks Technical (`STOCKS_TECHNICAL`, weight: 30%)
-- RSI(14) oversold/overbought detection
-- EMA(50/200) Golden Cross / Death Cross
-- MACD(12,26,9) signal line crossovers
-- 52-week high/low proximity and breakouts
-- Fibonacci retracement level hits
-- Volume spike detection (1.5x+ average)
-- Data: Yahoo Finance (free) + TAAPI.io (paid) + Alpha Vantage (backup)
+### Engine 1: MTF Momentum (`MTF_MOMENTUM`, `src/analysis/multi-timeframe.ts`)
+- **4 timeframes**: Weekly → Daily → 4H → 1H confluence analysis
+- Looks for aligned trend across all timeframes before triggering
+- Mean reversion sub-strategy when ADX < 20 (range-bound markets)
+- TAAPI bulk API calls cached 5 minutes via KV
+- Rate-limited: 15.5 sec between TAAPI calls to avoid throttle
+- Produces: `MTFSignal` with confluence %, suggested action (BUY/SELL/WAIT), SL/TP, position size (FULL/HALF)
+- Min confluence threshold: **65%**
 
-### Agent 2: Statistical Arbitrage (`STOCKS_STAT_ARB`, weight: 20%)
-- Pearson correlation analysis between watchlist pairs
+### Engine 2: Smart Money Concepts (`SMART_MONEY`, `src/analysis/smart-money.ts`)
+- **Order Block detection**: Bearish candle before impulse up → demand zone, vice versa
+- **Fair Value Gap (FVG)**: 3-candle gaps where candle 1 high < candle 3 low
+- **Liquidity Sweep**: Low sweeps below recent swing then strong reversal
+- **Break of Structure (BOS)**: Swing high/low structural break
+- Scoring: Each signal 0-100 strength, with age, direction, zone, confluence
+- Overall bias: BULLISH/BEARISH/NEUTRAL from all signal directions
+- `SmartMoneyAnalysis` includes `.score` (0-100) as confidence
+
+### Engine 3: Statistical Arbitrage (`STAT_ARB`, `src/agents/pairs-trading.ts`)
+- Pearson correlation analysis between 6 defined pairs
 - Log price ratio spread + Z-score calculation
 - Simplified cointegration test (variance ratio proxy)
 - Mean-reversion half-life estimation (OLS)
 - Tradable pair criteria: correlation > 0.7, |Z-score| > 1.5, half-life 1-30 days
+- Pairs: AAPL/MSFT, NVDA/AMD, XOM/CVX, JPM/GS, GOOGL/META, SPY/QQQ
 
-### Agent 3: Crypto (`CRYPTO`, weight: 15%)
+### Engine 4: Crypto/DeFi (`CRYPTO_DEFI`)
 - CoinGecko: prices, market cap, 24h/7d changes, trending coins
 - DexScreener: DEX pair data, liquidity analysis
 - Whale activity detection (large volume spikes on-chain)
-- Watchlist: Bitcoin, Ethereum, Solana, Cardano, Polkadot
+- Watchlist: Bitcoin, Ethereum, Solana, Cardano, Polkadot, Avalanche, Chainlink, Uniswap, Aave, Arbitrum
 
-### Agent 4: Prediction Markets (`POLYMARKET`, weight: 15%)
-- Polymarket active markets scraping (via CLOB API)
-- Value bet detection (odds mispricing in high-volume markets)
-- Filters: volume > $10K, probability range 15-85%
+### Engine 5: Event-Driven (`EVENT_DRIVEN`)
+- Polymarket: active prediction markets, value bet detection (volume > $10K, probability 15-85%)
+- Google Alerts: 12 RSS feeds routed by engine (earnings, M&A, SEC filings, crash signals)
+- Z.AI news sentiment scoring (BULLISH/BEARISH/NEUTRAL + confidence)
+- Finnhub: earnings calendar, company news
 
-### Agent 5: Commodities + Macro (`COMMODITIES`, weight: 20%)
-- Yahoo Finance: Gold, Silver, Oil (WTI/Brent), Natural Gas, Copper, Corn, Wheat
+### Engine 6: Macro/Commodities (`COMMODITIES`)
+- Yahoo Finance: Gold, Silver, Oil (WTI/Brent), Natural Gas, Copper, Platinum, Corn, Wheat, etc.
 - FRED: GDP, CPI, unemployment, yield curve (2Y/10Y), VIX
 - Yield curve inversion alerts
-- Big commodity move alerts (> 2% daily change)
+- **No longer sends "Commodity Alert — Big Moves"** (removed in commit bca9e2e)
+
+### Support: Market Regime Detection (`src/analysis/regime.ts`)
+- Detects: TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE
+- Based on: SPY ADX, EMA gap %, Bollinger width %, VIX level
+- Engine weight multipliers per regime (0.5x–2.0x):
+
+| Regime | MTF | SMC | STAT_ARB | OPTIONS | CRYPTO | EVENT |
+|--------|-----|-----|----------|---------|--------|-------|
+| TRENDING_UP | 1.5 | 1.3 | 0.7 | 0.8 | 1.4 | 1.0 |
+| TRENDING_DOWN | 1.3 | 1.2 | 1.0 | 1.2 | 0.7 | 1.0 |
+| RANGING | 0.7 | 1.0 | 1.6 | 1.5 | 0.8 | 1.0 |
+| VOLATILE | 0.5 | 0.7 | 1.3 | 1.8 | 1.2 | 1.5 |
+
+### Support: Z.AI — LLM Intelligence (`src/ai/z-engine.ts`)
+- Model: `@cf/meta/llama-3.1-8b-instruct` via Cloudflare Workers AI (free tier)
+- Config: max_tokens=300, temperature=0.3
+- **5 functions**:
+  1. `synthesizeSignal()` → 2-sentence trade rationale (<150 chars)
+  2. `scoreNewsSentiment()` → BULLISH/BEARISH/NEUTRAL per headline + confidence + symbols
+  3. `reviewTrade()` → Post-close P&L analysis (was signal correct? lessons?)
+  4. `weeklyNarrative()` → 3-5 bullet weekly summary (winners, losers, regime, watchlist)
+  5. `composeAlert()` → Batch multi-signal alert (<800 chars, mobile-friendly, HTML)
+- Graceful degradation: all functions return empty/safe defaults when AI unavailable
+
+### Support: Broker Manager (`src/broker-manager.ts`)
+- **Cycle-based orchestration**: `beginCycle()` → engines push → `flushCycle()` sends
+- Cross-engine dedup: 24-hour window per symbol (`DEDUP_MS = 86400000`)
+- Alert budget: max 3 trade alerts per hour (`MAX_TRADE_ALERTS_PER_HOUR`)
+- Per-symbol indicator storage: `cycleIndicators: Map<string, TechnicalIndicator[]>`
+- Signal merging by symbol (multiple engines can agree on same stock)
+- Z.AI integration: batch compose for 2+ high-confidence signals, individual synthesis otherwise
+- Market context message appended to alerts
+- "Nothing happening" fallback when no signals fire
+
+### Support: Execution Engine (`src/execution/engine.ts`)
+- Alpaca paper-mode bracket orders (entry + SL + TP)
+- Kelly fraction position sizing
+- Pre-flight risk checks (min strength 60, equity check)
+- Records every signal + trade in D1
+- Default risk limits: 8 max positions, 15 daily trades, 10% max position, 6% portfolio risk
+- Engine budgets: MTF 30%, SMC 20%, STAT_ARB 20%, OPTIONS 10%, CRYPTO 10%, EVENT 10%
+
+### Support: Portfolio Manager (`src/execution/portfolio.ts`)
+- Real-time portfolio snapshot synced with Alpaca
+- Performance metrics: Sharpe ratio, max drawdown, win rate, CAGR, profit factor
+- Daily P&L recording to D1 (end-of-day)
+- Per-engine performance tracking
 
 ---
 
@@ -291,21 +422,26 @@ These are **HARD-CODED DETERMINISTIC** rules. They are NOT AI-powered. No agent 
 
 ## 🚀 Deployment Guide
 
-### Method 1: Wrangler CLI (Direct)
+### Method 1: Wrangler CLI (Direct — PREFERRED)
 ```powershell
+# Prerequisites: set PATH first
+$env:PATH = "C:\Program Files\Git\cmd;C:\Program Files\GitHub CLI;C:\Program Files\nodejs;" + $env:PATH
+
 # 1. Login to Cloudflare (one-time)
-npx wrangler login
+node .\node_modules\wrangler\bin\wrangler.js login
 
 # 2. Set secrets (one-time, or after key rotation)
-npx wrangler secret put ALPHA_VANTAGE_API_KEY
-npx wrangler secret put TAAPI_API_KEY
-npx wrangler secret put FINNHUB_API_KEY
-npx wrangler secret put FRED_API_KEY
-npx wrangler secret put TELEGRAM_BOT_TOKEN
-npx wrangler secret put TELEGRAM_CHAT_ID
+node .\node_modules\wrangler\bin\wrangler.js secret put ALPHA_VANTAGE_API_KEY
+node .\node_modules\wrangler\bin\wrangler.js secret put TAAPI_API_KEY
+node .\node_modules\wrangler\bin\wrangler.js secret put FINNHUB_API_KEY
+node .\node_modules\wrangler\bin\wrangler.js secret put FRED_API_KEY
+node .\node_modules\wrangler\bin\wrangler.js secret put TELEGRAM_BOT_TOKEN
+node .\node_modules\wrangler\bin\wrangler.js secret put TELEGRAM_CHAT_ID
+node .\node_modules\wrangler\bin\wrangler.js secret put ALPACA_API_KEY
+node .\node_modules\wrangler\bin\wrangler.js secret put ALPACA_SECRET_KEY
 
 # 3. Deploy
-npx wrangler deploy
+node .\node_modules\wrangler\bin\wrangler.js deploy
 ```
 
 ### Method 2: Deploy Script (`deploy.mjs`)
@@ -331,13 +467,13 @@ node deploy.mjs
 ### Post-Deployment Verification
 ```bash
 # 1. Health check
-curl https://ymsa-financial-automation.<subdomain>.workers.dev/health
+curl https://ymsa-financial-automation.kuki-25d.workers.dev/health
 
 # 2. Test Telegram alert
-curl https://ymsa-financial-automation.<subdomain>.workers.dev/api/test-alert
+curl https://ymsa-financial-automation.kuki-25d.workers.dev/api/test-alert
 
 # 3. Check logs
-npx wrangler tail
+node .\node_modules\wrangler\bin\wrangler.js tail
 ```
 
 ---
@@ -351,13 +487,27 @@ npx wrangler tail
 | Compatibility Date | `2026-03-26` |
 | Compatibility Flags | `nodejs_compat` |
 | Account ID | `25d6c25b2232bbe0a5ae57c6fde9921c` |
-| Browser Binding | `BROWSER` (Playwright for Finviz/Google scraping) |
 
-### Planned Bindings (Commented Out — Phase 2)
-- **KV Namespace** (`YMSA_CACHE`) — Caching API responses
-- **R2 Bucket** (`YMSA_DATA`) — Historical data storage
-- **D1 Database** (`DB`) — Trade history, performance tracking
-- **Durable Objects** (`ORCHESTRATOR`, `PORTFOLIO`) — Persistent agent state
+### Active Bindings
+| Type | Name | Details |
+|---|---|---|
+| **D1 Database** | `DB` → `ymsa-db` | ID: `fbc9947c-7654-43d2-9cc9-e949baa60d05` — 10 tables |
+| **KV Namespace** | `YMSA_CACHE` | ID: `a110e14c46e440dcad5a9f46a32e85b9` — API response caching |
+| **Workers AI** | `AI` | `@cf/meta/llama-3.1-8b-instruct` — Z.AI engine |
+| **Browser** | `BROWSER` | Playwright for Finviz/Google scraping |
+
+### Environment Variables (`[vars]`)
+| Variable | Value | Purpose |
+|---|---|---|
+| `DEFAULT_WATCHLIST` | `AAPL,MSFT,NVDA,...` (10 stocks) | Core stock watchlist |
+| `CRYPTO_WATCHLIST` | `bitcoin,ethereum,...` (10 coins) | Crypto watchlist |
+| `EMA_FAST` / `EMA_SLOW` | 50 / 200 | EMA periods |
+| `RSI_OVERBOUGHT` / `RSI_OVERSOLD` | 70 / 30 | RSI thresholds |
+| `FIBO_LEVELS` | `0,0.236,0.382,0.5,0.618,0.786,1.0` | Fibonacci levels |
+| `FIBO_EXTENSIONS` | `1.0,1.272,1.618,2.0,2.618` | Fibonacci extensions |
+| `ALERT_PROXIMITY_52W` | `5` | 52-week proximity alert % |
+| `VOLUME_SPIKE_MULTIPLIER` | `1.5` | Volume spike threshold |
+| `ALPACA_PAPER_MODE` | `true` | Paper trading only |
 
 ---
 
@@ -365,8 +515,8 @@ npx wrangler tail
 
 ### 1. Alpha Vantage Rate Limits
 - Free tier: 5 requests/minute, 500/day
-- Solution: TAAPI.io is the primary indicator source; Alpha Vantage is backup only
-- If hit, the 15-minute quick scans may fail silently
+- Mostly superseded by local `computeIndicators()` from Yahoo OHLCV data
+- TAAPI.io used for MTF bulk queries; Alpha Vantage is last-resort backup
 
 ### 2. Yahoo Finance Unofficial API
 - Uses `query1.finance.yahoo.com/v8/finance/chart/` — no official guarantee
@@ -378,19 +528,34 @@ npx wrangler tail
 - If binding isn't configured, scrapers skip silently (graceful fallback in `runScraperScan()`)
 - Browser Rendering requires Cloudflare Workers Paid Plan
 
-### 4. EMA/MACD Crossover Detection
-- Golden Cross / Death Cross detection requires `previousIndicators` parameter
-- Currently `null` in most scans → crossovers only detected on subsequent runs
-- Future: Store previous indicator values in KV/D1
+### 4. TAAPI Rate Limiting for MTF
+- MTF engine uses TAAPI bulk API with 15.5 sec between calls
+- Results cached 5 minutes in KV to avoid repeated calls
+- If KV cache misses and TAAPI is throttled, MTF returns null signal
 
-### 5. Pairs Trading — Cointegration Test
+### 5. Local Indicator Engine Replaces TAAPI for Stocks
+- `src/analysis/indicators.ts` computes RSI, EMA, SMA, MACD, ATR from Yahoo OHLCV candles
+- This was built because TAAPI free tier broke for individual stock queries
+- TAAPI is still used for MTF bulk queries (4 timeframes at once)
+
+### 6. Pairs Trading — Cointegration Test
 - Uses simplified variance-ratio proxy — NOT the full Augmented Dickey-Fuller test
 - Adequate for screening but should not be treated as statistically rigorous
 
-### 6. Telegram Message Limits
+### 7. Telegram Message Limits
 - Max 4096 characters per message
 - `splitMessage()` in `alert-router.ts` handles chunking automatically
 - Rate limit: 30 messages per second per bot
+
+### 8. Z.AI Graceful Degradation
+- All Z.AI functions catch LLM errors and return empty/safe defaults
+- If `env.AI` binding is unavailable, `isZAiAvailable()` returns false
+- System continues fully operational without LLM — just loses AI reasoning text
+
+### 9. Evening Summary — Holdings Require D1
+- Holdings report in evening summary queries `getOpenTrades(env.DB)`
+- If D1 is unavailable or has no open trades, holdings section is simply skipped
+- Commodity/Index/Bitcoin sections always show regardless
 
 ---
 
@@ -408,36 +573,45 @@ Free APIs used: Yahoo Finance, CoinGecko, DexScreener, Polymarket, FRED
 
 ## 🔄 Development Workflow
 
+### PATH Setup (Required for every new terminal)
+```powershell
+$env:PATH = "C:\Program Files\Git\cmd;C:\Program Files\GitHub CLI;C:\Program Files\nodejs;" + $env:PATH
+```
+
 ### Local Development
 ```powershell
 # Install dependencies
 npm install
 
-# Run dev server (starts local Worker — NOT recommended for cron debugging)
-npm run dev
+# TypeScript type checking (MUST pass before deploy)
+node .\node_modules\typescript\bin\tsc --noEmit
 
-# TypeScript type checking
-npx tsc --noEmit
+# Run tests (MUST pass before deploy)
+node .\node_modules\vitest\vitest.mjs run
 
-# Run tests
-npm test
+# Deploy to Cloudflare (only with user permission)
+node .\node_modules\wrangler\bin\wrangler.js deploy
+
+# Git commit + push
+git add -A
+git commit -m "description"
+git push origin master
 ```
 
 ### Making Changes
 1. Edit source files in `src/`
-2. Run `npx tsc --noEmit` to check types
-3. Test individual endpoints via `npm run dev` + `curl`
-4. Deploy with `npx wrangler deploy` (with user permission)
-5. Verify with `npx wrangler tail` (live logs)
+2. Run `node .\node_modules\typescript\bin\tsc --noEmit` to check types
+3. Run `node .\node_modules\vitest\vitest.mjs run` to run tests
+4. Deploy with `node .\node_modules\wrangler\bin\wrangler.js deploy` (with user permission)
+5. Commit and push: `git add -A && git commit -m "..." && git push origin master`
 
 ### Config Changes (No Deploy Needed After Initial Deploy)
-- **Watchlist**: Edit `config/watchlist.json` (loaded at runtime from `wrangler.toml` `DEFAULT_WATCHLIST`)
-  - Note: `watchlist.json` is a reference file; the active watchlist is `DEFAULT_WATCHLIST` in `wrangler.toml`
-- **Alert Rules**: Edit `config/alert-rules.json` (reference only; logic is in `cron-handler.ts`)
-- **Screening Rules**: Edit `config/screening-rules.json` (reference only; logic is in `signals.ts`)
+- **Watchlist**: `config/watchlist.json` defines 3 tiers, but the active runtime watchlist comes from `DEFAULT_WATCHLIST` in `wrangler.toml` [vars]
+- **Alert Rules**: `config/alert-rules.json` is reference only; logic is in `alert-formatter.ts` + `broker-manager.ts`
+- **Screening Rules**: `config/screening-rules.json` is reference only; logic is in `signals.ts`
 
 > [!IMPORTANT]
-> The JSON config files in `config/` are currently **documentation/reference files**. The actual logic is hard-coded in the TypeScript source. To change watchlist or thresholds, update `wrangler.toml` [vars] and redeploy.
+> The JSON config files in `config/` are **documentation/reference files**. The actual logic is hard-coded in the TypeScript source. To change watchlist or thresholds, update `wrangler.toml` [vars] and redeploy.
 
 ---
 
@@ -493,17 +667,18 @@ npm test
 - **IMPORTANT**: Batched every 30 minutes
 - **INFO**: Daily digest only
 - **Quiet Hours**: 23:00–06:00 IST (override for CRITICAL)
-- **Duplicate Suppression**: 60-minute window per symbol
+- **Duplicate Suppression**: 24-hour window per symbol per action (e.g., `TECH:AAPL:BUY`)
+- **Trade Alert Budget**: Max 3 trade alerts per hour (broker-manager enforced)
 
 ---
 
 ## 🚨 Emergency Procedures
 
 ### Worker Not Sending Alerts
-1. Check health: `curl https://ymsa-financial-automation.<subdomain>.workers.dev/health`
-2. Test alert: `curl .../api/test-alert`
-3. Check logs: `npx wrangler tail`
-4. Verify secrets: `npx wrangler secret list`
+1. Check health: `curl https://ymsa-financial-automation.kuki-25d.workers.dev/health`
+2. Test alert: `curl https://ymsa-financial-automation.kuki-25d.workers.dev/api/test-alert`
+3. Check logs: `node .\node_modules\wrangler\bin\wrangler.js tail`
+4. Verify secrets: `node .\node_modules\wrangler\bin\wrangler.js secret list`
 
 ### Need to Stop All Cron Jobs
 - Remove or comment out the `[triggers] crons = [...]` block in `wrangler.toml`
@@ -519,58 +694,240 @@ npm test
 ### Rollback
 ```powershell
 # List deployments
-npx wrangler deployments list
+node .\node_modules\wrangler\bin\wrangler.js deployments list
 
 # Rollback to previous version
-npx wrangler rollback
+node .\node_modules\wrangler\bin\wrangler.js rollback
 ```
 
 ---
 
-## 📋 Watchlist (Current)
+## 📋 Watchlist (Current — from `config/watchlist.json`)
 
-| Symbol | Company | Sector |
-|---|---|---|
-| AAPL | Apple Inc. | Technology |
-| MSFT | Microsoft Corp. | Technology |
-| NVDA | NVIDIA Corp. | Technology |
-| GOOGL | Alphabet Inc. | Technology |
-| AMZN | Amazon.com Inc. | Consumer Cyclical |
-| META | Meta Platforms | Technology |
-| TSLA | Tesla Inc. | Consumer Cyclical |
-| AMD | Advanced Micro Devices | Technology |
-| AVGO | Broadcom Inc. | Technology |
-| CRM | Salesforce Inc. | Technology |
+### Tier 1: CORE (15 stocks — always scanned)
+| Sector | Symbols |
+|---|---|
+| Technology | AAPL, MSFT, NVDA, GOOGL, META, CRM |
+| Consumer | AMZN, TSLA |
+| Semiconductors | AMD, AVGO, INTC, QCOM |
+| Finance | JPM, GS, V |
 
-### Crypto Watchlist
-Bitcoin, Ethereum, Solana, Cardano, Polkadot
+### Tier 2: ROTATION (15 stocks — regime-dependent)
+| Sector | Symbols |
+|---|---|
+| Healthcare | UNH, JNJ, PFE |
+| Energy | XOM, CVX, COP |
+| Consumer/Retail | NKE, SBUX, MCD |
+| Industrial | CAT, BA, HON |
+| SaaS | NOW, SNOW, PANW |
 
-### Commodity Watchlist
-Gold, Silver, Oil WTI, Oil Brent, Natural Gas, Copper, Platinum, Corn, Wheat, Soybean, Cocoa, Coffee, Sugar, Cotton
+### Tier 3: ETFs + Indices (9 instruments — regime detection)
+| Category | Symbols |
+|---|---|
+| Index ETFs | SPY, QQQ, IWM |
+| Sector ETFs | XLF, XLK, XLE |
+| Commodity/Bond | GLD, TLT |
+| Volatility | VIX |
+
+### Stat-Arb Pairs (6 defined)
+AAPL/MSFT, NVDA/AMD, XOM/CVX, JPM/GS, GOOGL/META, SPY/QQQ
+
+### Crypto Watchlist (10 coins)
+Bitcoin, Ethereum, Solana, Cardano, Polkadot, Avalanche, Chainlink, Uniswap, Aave, Arbitrum
+
+### Commodity Symbols (Yahoo Finance)
+Gold (`GC=F`), Silver (`SI=F`), Oil WTI (`CL=F`), Brent (`BZ=F`), Nat Gas (`NG=F`), Copper (`HG=F`), Platinum (`PL=F`), Corn (`ZC=F`), Wheat (`ZW=F`), Soybean (`ZS=F`), Cocoa (`CC=F`), Coffee (`KC=F`), Sugar (`SB=F`), Cotton (`CT=F`)
+
+### Evening Summary — Tracked Investments (filtered view)
+The evening summary only shows updates for:
+- **Indices**: S&P 500 (`^GSPC`), NASDAQ (`^IXIC`), DOW JONES (`^DJI`)
+- **Commodities**: GOLD (`GC=F`), Oil WTI (`CL=F`)
+- **Crypto**: Bitcoin (`BTC-USD` via CoinGecko)
+- **Holdings**: Any stocks from open BUY trades in D1
+- **Holdings Report**: Company, Ticker, Closing Price, Purchase Price, Trade Date, Daily P/L, Accumulated P/L
 
 ---
 
 ## 📝 Version History
 
-| Date | Version | Changes |
+| Date | Commit | Changes |
 |---|---|---|
-| 2026-03-26 | v2.0.0 | Full 5-agent system, Hono framework, all API integrations, risk controller |
-| 2026-03-27 | v2.0.0 | Memory Journal created, deployment documentation |
+| 2026-03-26 | `3e77f5c` | Initial commit: 5-agent system, Hono framework, all API integrations |
+| 2026-03-26 | `5884b24` | Fix Sunday cron from `0` to `SUN` for Cloudflare compatibility |
+| 2026-03-26 | `8d6718d` | SRE dashboard + production audit script (87% score) |
+| 2026-03-26 | `e7f4072` | 100% SRE audit — secrets, KV, D1, tests, parallel scan |
+| 2026-03-26 | `8e962cb` | Fix TAAPI bulk API + correct stock symbol format + cron SUN match |
+| 2026-03-27 | `d5b4adc` | Add SUPERCHARGE.md: 6-engine blueprint with 12 Google Alerts RSS feeds |
+| 2026-03-27 | `29b159f` | **v3.0: SUPERCHARGE** — 6 engines, Alpaca execution, D1 database, regime detection |
+| 2026-03-27 | `e738ade` | v3.0.1: Fix D1 schema + dashboard v3 overhaul |
+| 2026-03-27 | `85e5632` | Fix dashboard bugs — confidence, regime, portfolio fallback, favicon |
+| 2026-03-27 | `c0e28a4` | Wire Google Alerts + v3 engines into cron pipeline, `/api/news` endpoint |
+| 2026-03-27 | `449deda` | Fix dashboard metrics — performance/daily-pnl/engine-stats endpoints, win rate |
+| 2026-03-28 | `77a05d5` | Fix regime_history D1 INSERT column mismatch + news_alerts created_at |
+| 2026-03-28 | `a7776b8` | **Local indicator engine** — compute RSI/MACD/EMA from Yahoo OHLCV, replacing broken TAAPI free tier |
+| 2026-03-28 | `629a1e3` | Actionable trade alert format for all Telegram alerts |
+| 2026-03-28 | `fbffe3e` | Add `/api/send-trade-alert` endpoint + fix SL zone anchoring bug |
+| 2026-03-28 | `82492ab` | **Smart Broker Manager** — centralized Telegram decision engine |
+| 2026-03-29 | `b2de6f2` | **Enterprise upgrade**: Google Auth + Z.AI + P0/P1 fixes |
+| 2026-03-29 | `b93014f` | Configure Google OAuth Client ID for authentication |
+| 2026-03-30 | `8df582f` | **Z.AI full integration**: wire reviewTrade, composeAlert, real weekly P&L, 30 tests |
+| 2026-04-01 | `bca9e2e` | **Trade alert overhaul**: SMA 50/200, 24hr dedup, remove commodity Big Moves, filtered evening summary with holdings report |
 
 ---
 
-## 🧩 Planned Features (Phase 2)
+## 💾 D1 Database Schema (`src/db/schema.sql`)
 
-- [ ] KV Namespace caching for API responses (reduce rate limit hits)
-- [ ] D1 Database for trade history and performance tracking
-- [ ] Durable Objects for persistent orchestrator state
+10 tables with full audit trail:
+
+| Table | Key Columns | Purpose |
+|---|---|---|
+| `trades` | id, engine_id, symbol, side, qty, entry_price, exit_price, stop_loss, take_profit, status, pnl, pnl_pct, opened_at, closed_at, broker_order_id | All trade records (OPEN/CLOSED/CANCELLED) |
+| `positions` | id, symbol, engine_id, side, qty, avg_entry, current_price, unrealized_pnl | Live position tracking |
+| `signals` | id, engine_id, signal_type, symbol, direction, strength, metadata (JSON), acted_on | Signal audit trail |
+| `daily_pnl` | date (PK), total_equity, daily_pnl, daily_pnl_pct, open_positions, trades_today, win_rate, sharpe_snapshot, max_drawdown | End-of-day snapshots |
+| `engine_performance` | id, engine_id, date, signals_generated, trades_executed, win_rate, pnl, avg_rr, weight | Per-engine metrics |
+| `regime_history` | id, regime, detected_at, vix_level, spy_trend, confidence | Regime change log |
+| `pairs_state` | pair_key (PK), symbol_a, symbol_b, correlation, cointegration_pval, half_life, hedge_ratio, z_score, status | Pairs trading state |
+| `news_alerts` | id, category, title, url, published_at, processed, created_at | Google Alerts ingestion |
+| `risk_events` | id, event_type, severity, description, action_taken, created_at | Risk event audit |
+| `kill_switch_state` | id=singleton, tier, activated_at, daily_pnl_pct, reason | Kill switch persistence |
+
+### Key Queries (`src/db/queries.ts` — 20+ exported functions)
+- **Trades**: `insertTrade`, `closeTrade`, `getOpenTrades`, `getTradesByEngine`, `getRecentTrades`, `getClosedTradesSince`
+- **Positions**: `upsertPosition`, `deletePosition`, `getOpenPositions`, `getPositionBySymbol`
+- **Signals**: `insertSignal`, `getRecentSignals`, `getSignalsByEngine`
+- **P&L**: `upsertDailyPnl`, `getDailyPnlRange`, `getRecentDailyPnl`
+- **Engine**: `upsertEnginePerformance`, `getEnginePerformance`
+- **Utility**: `generateId(prefix)`, `insertRiskEvent`, `getRecentRiskEvents`, `getRecentNewsAlerts`, `getNewsAlertsByCategory`
+
+---
+
+## 📨 Trade Alert Format (as of commit bca9e2e)
+
+Every trade alert follows this exact structure:
+
+```
+🟢 TRADE ALERT — BUY AAPL
+
+Reason: Smart Money + MTF confluence detected bullish setup.
+🧠 Z.AI: Order block at demand zone with rising volume confirmation.
+
+Signals:
+• Order Block (Strength: 85, Age: 3d, BULLISH)
+• MTF Confluence (Weekly: bullish, Daily: support, 4H: trigger)
+• Models: Smart Money + MTF (2 agree)
+
+Technical Info:
+• RSI(14): 28.5
+• MACD: 0.253 (Bullish)
+• SMA 50: $178.50
+• SMA 200: $165.30
+
+Trade Setup:
+  Entry: $180.50
+  Stop Loss: $175.00
+  Take Profit:
+    TP1: $190.00 (R:R 1:1.7)
+    TP2: $196.25 (R:R 1:2.9)
+
+Confidence: 85/100 (High)
+
+Market Context:
+Trend-aligned trade — market is trending up (conf 78%). VIX elevated at 26.
+
+🔗 TradingView | Yahoo
+⏰ 2026-04-01 12:00:00 UTC
+```
+
+### Alert Dedup Rules
+- **Broker Manager**: `DEDUP_MS = 24 * 60 * 60 * 1000` (24 hours)
+- **Alert Formatter**: `DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000` (24 hours)
+- Key format: `{ENGINE}:{SYMBOL}:{ACTION}` (e.g., `TECH:AAPL:BUY`, `SMC:NVDA:SELL`)
+- Same stock + same action = suppressed for 24 hours
+- **Max 3 trade alerts per hour** (broker-manager budget)
+
+---
+
+## 📰 Google Alerts RSS Feeds (12 feeds, `src/api/google-alerts.ts`)
+
+| # | Feed Topic | Routed To Engines |
+|---|---|---|
+| 1 | Mega Tech Earnings (AAPL, MSFT, GOOGL, AMZN) | MTF_MOMENTUM |
+| 2 | More Tech Earnings (META, NVDA, CRM, TSLA) | MTF_MOMENTUM |
+| 3 | M&A Deals | STAT_ARB, EVENT_DRIVEN |
+| 4 | Short Squeeze / Options Flow | SMART_MONEY, OPTIONS |
+| 5 | Fed / Rate Decisions | EVENT_DRIVEN, RISK |
+| 6 | Earnings Beat/Miss | OPTIONS, EVENT_DRIVEN |
+| 7 | SEC 13F Filings | SMART_MONEY |
+| 8 | Crypto Regulation/ETF | CRYPTO_DEFI |
+| 9 | Bank Earnings (JPM, GS) | MTF_MOMENTUM |
+| 10 | Semiconductor Earnings (AMD, AVGO, INTC) | MTF_MOMENTUM, STAT_ARB |
+| 11 | Buybacks/Dividends | OPTIONS |
+| 12 | Market Crash Signals | EVENT_DRIVEN, RISK |
+
+Feeds are parsed via regex-based Atom XML parsing (no external XML library needed).
+
+---
+
+## 📐 Local Indicator Engine (`src/analysis/indicators.ts`)
+
+`computeIndicators(symbol, candles, timeframe='daily')` returns up to **9 indicators**:
+
+| Indicator | Method | Period |
+|---|---|---|
+| RSI | Wilder's smoothing | 14 |
+| EMA_50 | Exponential MA | 50 |
+| EMA_200 | Exponential MA | 200 |
+| SMA_50 | Simple MA | 50 |
+| SMA_200 | Simple MA | 200 |
+| MACD | EMA(12) − EMA(26) | Standard |
+| MACD_SIGNAL | EMA(9) of MACD | 9 |
+| MACD_HISTOGRAM | MACD − Signal | — |
+| ATR | Wilder's smoothing | 14 |
+
+**Input**: OHLCV candles (newest-first from Yahoo Finance, reversed internally)
+**Why built**: TAAPI.io free tier broke for individual stock queries; this computes locally from Yahoo data at zero cost.
+
+---
+
+## 🧪 Test Suite (`src/__tests__/`)
+
+**Framework**: Vitest ^3.0.0 | **Total**: 43 tests | **All passing**
+
+| File | Tests | Coverage |
+|---|---|---|
+| `signals.test.ts` | 7 | RSI oversold/overbought, volume spike, 52W proximity, score calculation |
+| `risk-controller.test.ts` | 6 | Kill switch, daily drawdown, position size, loss limit, custom limits |
+| `z-engine.test.ts` | 30 | synthesizeSignal, scoreNewsSentiment, reviewTrade, weeklyNarrative, composeAlert, isZAiAvailable, error handling, edge cases |
+
+### Running Tests
+```powershell
+$env:PATH = "C:\Program Files\Git\cmd;C:\Program Files\GitHub CLI;C:\Program Files\nodejs;" + $env:PATH
+node .\node_modules\vitest\vitest.mjs run
+```
+
+---
+
+## 🧩 Planned Features / Future Improvements
+
+### Completed (formerly planned)
+- ✅ KV Namespace caching for API responses (YMSA_CACHE active)
+- ✅ D1 Database for trade history and performance tracking (10 tables)
+- ✅ Previous indicator storage (cycleIndicators in broker-manager)
+- ✅ Z.AI LLM integration for signal reasoning
+
+### Still Planned
+- [ ] R2 Bucket for historical data storage (backtest datasets)
+- [ ] Durable Objects for persistent orchestrator state across invocations
 - [ ] Full ADF cointegration test (replace variance ratio proxy)
-- [ ] Previous indicator storage for accurate crossover detection
 - [ ] WhatsApp and email alert channels
 - [ ] Glassnode integration for on-chain crypto metrics (NVT, exchange flows)
 - [ ] Custom watchlist management via Telegram bot commands
 - [ ] Backtesting engine for signal validation
+- [ ] Live (non-paper) Alpaca execution mode
+- [ ] Options pricing engine (Black-Scholes, Greeks)
+- [ ] Portfolio heat map visualization
 
 ---
 
-> **Note to AI Assistants**: When the user asks you to work on this project, READ THIS FILE FIRST. It contains everything you need to understand the system without reading every source file. If you need specific implementation details, the source file locations are mapped above.
+> **Note to AI Assistants**: When the user asks you to work on this project, READ THIS FILE FIRST. It contains everything you need to understand the system without reading every source file. If you need specific implementation details, the source file locations are mapped above. Always set PATH first: `$env:PATH = "C:\Program Files\Git\cmd;C:\Program Files\GitHub CLI;C:\Program Files\nodejs;" + $env:PATH`. Use `node .\node_modules\...` instead of `npx` — npx is blocked by execution policy on this machine.
