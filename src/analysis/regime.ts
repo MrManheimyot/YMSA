@@ -79,9 +79,11 @@ export async function detectRegime(env: Env): Promise<MarketRegime> {
 
     // Store in D1 for tracking
     if (env.DB) {
+      const id = `reg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const spyTrend = regime.includes('UP') ? 'BULLISH' : regime.includes('DOWN') ? 'BEARISH' : 'NEUTRAL';
       await env.DB.prepare(
-        `INSERT INTO regime_history (regime, vix, adx, spy_ema50_200_gap, detected_at) VALUES (?, ?, ?, ?, ?)`
-      ).bind(regime, vix, adx, emaGap, Date.now()).run().catch(() => {});
+        `INSERT INTO regime_history (id, regime, detected_at, vix_level, spy_trend, confidence) VALUES (?, ?, ?, ?, ?, ?)`
+      ).bind(id, regime, Date.now(), vix, spyTrend, confidence).run().catch(() => {});
     }
 
     return { regime, confidence, vix, adx, emaGap, bollingerWidth, suggestedEngines, timestamp: Date.now() };

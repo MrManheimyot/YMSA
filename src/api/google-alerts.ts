@@ -119,14 +119,15 @@ export async function storeNewsAlerts(
     const id = simpleHash(item.url);
     try {
       await db.prepare(
-        `INSERT OR IGNORE INTO news_alerts (id, category, title, url, published_at, processed)
-         VALUES (?, ?, ?, ?, ?, 0)`
+        `INSERT OR IGNORE INTO news_alerts (id, category, title, url, published_at, processed, created_at)
+         VALUES (?, ?, ?, ?, ?, 0, ?)`
       ).bind(
         id,
         item.category,
         item.title,
         item.url,
-        new Date(item.published).getTime()
+        new Date(item.published).getTime(),
+        Date.now()
       ).run();
 
       inserted++;
