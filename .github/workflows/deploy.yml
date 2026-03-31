@@ -2,7 +2,7 @@ name: Deploy to Cloudflare Workers
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   workflow_dispatch:
 
 jobs:
@@ -25,6 +25,9 @@ jobs:
 
       - name: TypeScript check
         run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npx vitest run
 
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3

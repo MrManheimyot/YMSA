@@ -21,14 +21,36 @@ import { renderDashboard, getSystemStatus } from './dashboard';
 import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
 import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentDailyPnl, getAllLatestEnginePerformance } from './db/queries';
 import { fetchGoogleAlerts, storeNewsAlerts, getFeedConfig } from './api/google-alerts';
+import { isAuthenticated, handleGoogleAuth, handleLogout, handleAuthMe } from './auth';
+import { ensureEnv } from './utils/env-validator';
+import { log } from './utils/logger';
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
+    // Env validation (logged once per isolate)
+    ensureEnv(env);
+
+    // CORS headers
+    const origin = request.headers.get('Origin') || '';
+    const corsHeaders: Record<string, string> = {
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
+      'Access-Control-Allow-Credentials': 'true',
+    };
+    // Allow same-origin + localhost for dev
+    const allowedOrigins = [url.origin, 'http://localhost:8787'];
+    corsHeaders['Access-Control-Allow-Origin'] = allowedOrigins.includes(origin) ? origin : url.origin;
+
+    // Preflight
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { status: 204, headers: corsHeaders });
+    }
+
     try {
-      // ─── Health Check ──────────────────────────────
+      // ─── Health Check (public) ─────────────────────
       if (path === '/' || path === '/health') {
         return jsonResponse({
           status: 'ok',
@@ -39,29 +61,49 @@ export default {
           timestamp: new Date().toISOString(),
           watchlist: env.DEFAULT_WATCHLIST.split(','),
           cryptoWatchlist: (env.CRYPTO_WATCHLIST || '').split(','),
-        });
+          ai: !!(env as any).AI ? 'Z.AI enabled' : 'Z.AI unavailable',
+        }, 200, corsHeaders);
       }
 
-      // ─── SRE Dashboard ─────────────────────────────
+      // ─── Auth Routes (public) ──────────────────────
+      if (path === '/auth/google' && request.method === 'POST') {
+        const res = await handleGoogleAuth(request, env);
+        return addHeaders(res, corsHeaders);
+      }
+      if (path === '/auth/logout' && request.method === 'POST') {
+        return addHeaders(handleLogout(), corsHeaders);
+      }
+      if (path === '/auth/me') {
+        const res = await handleAuthMe(request, env);
+        return addHeaders(res, corsHeaders);
+      }
+
+      // ─── Auth Check — everything below requires auth ─────
+      const auth = await isAuthenticated(request, env);
+      if (!auth.ok) {
+        // If requesting dashboard without auth, show login page
+        if (path === '/dashboard') {
+          const html = renderDashboard(url.origin, false);
+          return new Response(html, {
+            headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...corsHeaders },
+          });
+        }
+        return jsonResponse({ error: 'Unauthorized — sign in at /dashboard or provide X-API-Key' }, 401, corsHeaders);
+      }
+      log.info('auth', `Authenticated: ${auth.email}`, { path });
+
+      // ─── SRE Dashboard (authed) ─────────────────────
       if (path === '/dashboard') {
-        const html = renderDashboard(url.origin);
+        const html = renderDashboard(url.origin, true);
         return new Response(html, {
-          headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' },
+          headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', ...corsHeaders },
         });
       }
 
-      // ─── System Status (for dashboard) ─────────────
+      // ─── System Status (authed) ─────────────────────
       if (path === '/api/system-status') {
         const status = getSystemStatus(env);
-        return jsonResponse(status);
-      }
-
-      // ─── Auth Check — all /api/* routes require key ─────
-      if (path.startsWith('/api/')) {
-        const apiKey = request.headers.get('X-API-Key') || url.searchParams.get('key');
-        if (env.YMSA_API_KEY && apiKey !== env.YMSA_API_KEY) {
-          return jsonResponse({ error: 'Unauthorized — provide X-API-Key header or ?key= param' }, 401);
-        }
+        return jsonResponse(status, 200, corsHeaders);
       }
 
       // ─── Stock Quote (Yahoo Finance — FREE) ────────
@@ -398,13 +440,19 @@ export default {
   },
 };
 
-function jsonResponse(data: unknown, status: number = 200): Response {
+function jsonResponse(data: unknown, status: number = 200, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
       'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'no-cache',
+      ...extra,
     },
   });
+}
+
+function addHeaders(res: Response, extra: Record<string, string>): Response {
+  const newRes = new Response(res.body, res);
+  for (const [k, v] of Object.entries(extra)) newRes.headers.set(k, v);
+  return newRes;
 }

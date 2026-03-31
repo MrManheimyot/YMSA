@@ -156,3 +156,13 @@ CREATE TABLE risk_events (
 );
 
 CREATE INDEX idx_risk_created ON risk_events(created_at);
+
+-- ─── Kill Switch State (persists across invocations) ─────────
+CREATE TABLE IF NOT EXISTS kill_switch_state (
+  id TEXT PRIMARY KEY DEFAULT 'singleton',
+  tier TEXT NOT NULL DEFAULT 'NONE',      -- NONE, REDUCE, CLOSE_ALL, HALT
+  activated_at INTEGER,
+  daily_pnl_pct REAL,
+  reason TEXT,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);

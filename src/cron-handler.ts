@@ -26,6 +26,7 @@ import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
 import { insertRiskEvent, generateId } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, sendRiskAlert, sendExecutionAlert } from './broker-manager';
+import { scoreNewsSentiment, weeklyNarrative, isZAiAvailable } from './ai/z-engine';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -229,6 +230,24 @@ async function runMorningBriefing(env: Env): Promise<void> {
       }
     }
   } catch {}
+
+  // ── Z.AI News Sentiment ──
+  if (isZAiAvailable(env) && marketNews.length > 0) {
+    try {
+      const headlines = marketNews.slice(0, 8).map(n => n.headline);
+      const sentiment = await scoreNewsSentiment((env as any).AI, headlines);
+      if (sentiment.length > 0) {
+        const bullish = sentiment.filter(s => s.sentiment === 'BULLISH').length;
+        const bearish = sentiment.filter(s => s.sentiment === 'BEARISH').length;
+        const emoji = bullish > bearish ? '🟢' : bearish > bullish ? '🔴' : '⚪';
+        lines.push(``, `🧠 <b>Z.AI Sentiment:</b> ${emoji} ${bullish}B / ${bearish}🔴 / ${sentiment.length - bullish - bearish}⚪`);
+        for (const s of sentiment.slice(0, 3)) {
+          const icon = s.sentiment === 'BULLISH' ? '📈' : s.sentiment === 'BEARISH' ? '📉' : '➡️';
+          lines.push(`  ${icon} ${s.headline.slice(0, 60)}... (${s.confidence}%)`);
+        }
+      }
+    } catch { /* Z.AI optional */ }
+  }
 
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
   lines.push(`🎯 <i>Have a profitable day!</i>`);
@@ -611,6 +630,29 @@ async function runWeeklyReview(env: Env): Promise<void> {
   }
 
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
+
+  // Z.AI Weekly Narrative
+  if (isZAiAvailable(env)) {
+    try {
+      const metrics = await getPerformanceMetrics(env);
+      const vixVal = macroDashboard.find((m) => m.id === 'VIXCLS')?.value || 0;
+      const narrative = await weeklyNarrative((env as any).AI, {
+        weeklyPnl: 0,
+        weeklyPnlPct: 0,
+        winRate: metrics.winRate || 0,
+        totalTrades: metrics.totalTrades || 0,
+        topWinner: 'N/A',
+        topLoser: 'N/A',
+        regime: 'unknown',
+        vix: vixVal,
+      });
+      if (narrative) {
+        lines.push(``, `🧠 <b>Z.AI Weekly Summary:</b>`);
+        lines.push(narrative);
+      }
+    } catch { /* Z.AI optional */ }
+  }
+
   lines.push(`📌 <i>Review positions, adjust watchlist. Good week ahead!</i>`);
 
   await sendDailyBriefing(lines.join('\n'), env);

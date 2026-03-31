@@ -309,3 +309,43 @@ export async function getNewsAlertsByCategory(db: D1Database, category: string, 
 export function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
+
+// ─── Kill Switch State ──────────────────────────────────────
+
+export interface KillSwitchState {
+  tier: 'NONE' | 'REDUCE' | 'CLOSE_ALL' | 'HALT';
+  activated_at: number | null;
+  daily_pnl_pct: number | null;
+  reason: string | null;
+  updated_at: number;
+}
+
+export async function getKillSwitchState(db: D1Database): Promise<KillSwitchState | null> {
+  try {
+    const result = await db.prepare(
+      `SELECT tier, activated_at, daily_pnl_pct, reason, updated_at FROM kill_switch_state WHERE id = 'singleton'`
+    ).first();
+    return result as KillSwitchState | null;
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertKillSwitchState(
+  db: D1Database,
+  tier: string,
+  dailyPnlPct: number | null,
+  reason: string | null,
+): Promise<void> {
+  const now = Date.now();
+  await db.prepare(
+    `INSERT INTO kill_switch_state (id, tier, activated_at, daily_pnl_pct, reason, updated_at)
+     VALUES ('singleton', ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET
+       tier = excluded.tier,
+       activated_at = CASE WHEN excluded.tier != 'NONE' AND kill_switch_state.tier = 'NONE' THEN ? ELSE kill_switch_state.activated_at END,
+       daily_pnl_pct = excluded.daily_pnl_pct,
+       reason = excluded.reason,
+       updated_at = excluded.updated_at`
+  ).bind(tier, tier !== 'NONE' ? now : null, dailyPnlPct, reason, now, now).run();
+}

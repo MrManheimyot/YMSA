@@ -43,6 +43,7 @@ FIBO_EXTENSIONS = "1.272,1.618,2.618"
 ALERT_PROXIMITY_52W = "0.05"
 VOLUME_SPIKE_MULTIPLIER = "1.5"
 CRYPTO_WATCHLIST = "bitcoin,ethereum,solana,cardano,polkadot"
+GOOGLE_CLIENT_ID = ""
 
 # ─── KV Namespaces ───────────────────────────────────────────
 [[kv_namespaces]]
@@ -87,3 +88,7 @@ database_id = "fbc9947c-7654-43d2-9cc9-e949baa60d05"
 # ─── Browser Rendering (Playwright for Finviz/Google scraping)
 [browser]
 binding = "BROWSER"
+
+# ─── Workers AI (Z.AI engine — signal reasoning, sentiment, narratives)
+[ai]
+binding = "AI"

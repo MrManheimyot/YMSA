@@ -37,11 +37,15 @@ export interface Env {
   ALERT_PROXIMITY_52W: string;
   VOLUME_SPIKE_MULTIPLIER: string;
 
+  // Google Auth
+  GOOGLE_CLIENT_ID: string;
+
   // Cloudflare Bindings
   BROWSER: any;              // Browser Rendering (Playwright)
   YMSA_CACHE?: KVNamespace;  // KV cache
   YMSA_DATA?: R2Bucket;      // R2 storage
   DB: D1Database;            // D1 database (always bound)
+  AI?: any;                  // Workers AI (Z.AI engine)
   ORCHESTRATOR?: DurableObjectNamespace;  // Durable Object
   PORTFOLIO?: DurableObjectNamespace;     // Durable Object
 }

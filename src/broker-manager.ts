@@ -16,6 +16,8 @@ import type { Env, Signal, StockQuote, TechnicalIndicator, FibonacciResult } fro
 import type { SmartMoneyAnalysis } from './analysis/smart-money';
 import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
+import { synthesizeSignal, isZAiAvailable } from './ai/z-engine';
+import type { MergedTradeInfo } from './ai/z-engine';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -297,7 +299,7 @@ function mergeBySymbol(outputs: EngineOutput[]): MergedTrade[] {
 // Step 3: Plan messages
 // ═══════════════════════════════════════════════════════════════
 
-function planTradeAlert(trade: MergedTrade): MessagePlan | null {
+function planTradeAlert(trade: MergedTrade, aiReasoning?: string): MessagePlan | null {
   const key = `${trade.symbol}:${trade.direction}`;
   if (wasSentRecently(key)) return null;
   if (!canSendTradeAlert()) return null;
@@ -333,6 +335,7 @@ function planTradeAlert(trade: MergedTrade): MessagePlan | null {
     `${emoji} <b>${trade.direction} ${trade.symbol}</b>`,
     ``,
     `<b>Why:</b> ${trade.reasons[0]}`,
+    ...(aiReasoning ? [`🧠 <i>${aiReasoning}</i>`] : []),
     ...(trade.engines.length > 1 ? [`<b>Models:</b> ${engineList} (${trade.engines.length} agree)`] : []),
     ...(trade.conflicting ? [`⚠️ <i>Conflicting signals from other engines</i>`] : []),
     ``,
@@ -411,7 +414,26 @@ export async function flushCycle(env: Env): Promise<number> {
   // 1. Merge engine outputs per symbol → trade alerts
   const trades = mergeBySymbol(cycleOutputs);
   for (const trade of trades) {
-    const plan = planTradeAlert(trade);
+    // Z.AI: Enrich with LLM reasoning if available
+    let aiReasoning: string | undefined;
+    if (isZAiAvailable(env)) {
+      try {
+        const tradeInfo: MergedTradeInfo = {
+          symbol: trade.symbol,
+          direction: trade.direction,
+          confidence: trade.confidence,
+          engines: trade.engines,
+          reasons: trade.reasons,
+          entry: trade.entry,
+          stopLoss: trade.stopLoss,
+          tp1: trade.tp1,
+          conflicting: trade.conflicting,
+        };
+        aiReasoning = await synthesizeSignal((env as any).AI, tradeInfo, cycleRegime) || undefined;
+      } catch { /* Z.AI optional */ }
+    }
+
+    const plan = planTradeAlert(trade, aiReasoning);
     if (plan) {
       markSent(`${trade.symbol}:${trade.direction}`);
       recordTradeAlert();
