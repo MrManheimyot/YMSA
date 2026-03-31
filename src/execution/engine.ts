@@ -5,7 +5,9 @@
 import type { Env } from '../types';
 import { calculatePositionSize, calculateATRStop } from '../analysis/position-sizer';
 import { submitBracketOrder, getAccount } from '../api/alpaca';
-import { insertTrade, upsertPosition, insertSignal, generateId } from '../db/queries';
+import { insertTrade, upsertPosition, insertSignal, closeTrade, generateId } from '../db/queries';
+import type { TradeRecord } from '../db/queries';
+import { reviewTrade, isZAiAvailable } from '../ai/z-engine';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -261,6 +263,61 @@ export function formatBatchResults(results: ExecutionResult[]): string {
     `⏭️ Skipped: ${skipped}`,
     `❌ Failed: ${failed}`,
   ].join('\n');
+}
+
+// ─── Close Trade with Z.AI Review ────────────────────────────
+
+/**
+ * Close a trade in D1 and optionally run Z.AI post-trade review.
+ * Returns the review text (empty string if unavailable).
+ */
+export async function closeTradeWithReview(
+  trade: TradeRecord,
+  exitPrice: number,
+  env: Env,
+): Promise<string> {
+  const pnl = trade.side === 'BUY'
+    ? (exitPrice - trade.entry_price) * trade.qty
+    : (trade.entry_price - exitPrice) * trade.qty;
+  const pnlPct = trade.entry_price > 0 ? (pnl / (trade.entry_price * trade.qty)) * 100 : 0;
+
+  // Close in D1
+  await closeTrade(env.DB, trade.id, exitPrice, pnl, pnlPct);
+
+  // Z.AI post-trade review
+  let review = '';
+  if (isZAiAvailable(env)) {
+    try {
+      review = await reviewTrade((env as any).AI, {
+        symbol: trade.symbol,
+        side: trade.side,
+        entry: trade.entry_price,
+        exit: exitPrice,
+        pnl,
+        pnlPct,
+        engine: trade.engine_id,
+        reason: trade.broker_order_id || 'N/A',
+      });
+    } catch (err) { console.error('[Z.AI] Trade review failed:', err); }
+  }
+
+  // Send Telegram notification
+  try {
+    const emoji = pnl >= 0 ? '🟢' : '🔴';
+    const lines = [
+      `${emoji} <b>TRADE CLOSED — ${trade.symbol}</b>`,
+      `━━━━━━━━━━━━━━━━━━━━━━`,
+      `Engine: ${trade.engine_id}`,
+      `${trade.side} ${trade.qty} @ $${trade.entry_price.toFixed(2)} → $${exitPrice.toFixed(2)}`,
+      `P&L: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(1)}%)`,
+    ];
+    if (review) {
+      lines.push(``, `🧠 <i>${review}</i>`);
+    }
+    await sendTelegramMessage(lines.join('\n'), env);
+  } catch { /* non-critical */ }
+
+  return review;
 }
 
 // ─── Telegram Helper ─────────────────────────────────────────

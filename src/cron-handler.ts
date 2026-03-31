@@ -23,7 +23,7 @@ import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from './api/goog
 import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEnginePerformance, getPerformanceMetrics, formatPerformanceReport } from './execution/portfolio';
 import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
 import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
-import { insertRiskEvent, generateId } from './db/queries';
+import { insertRiskEvent, generateId, getClosedTradesSince } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, sendRiskAlert, sendExecutionAlert } from './broker-manager';
 import { scoreNewsSentiment, weeklyNarrative, isZAiAvailable } from './ai/z-engine';
@@ -246,7 +246,7 @@ async function runMorningBriefing(env: Env): Promise<void> {
           lines.push(`  ${icon} ${s.headline.slice(0, 60)}... (${s.confidence}%)`);
         }
       }
-    } catch { /* Z.AI optional */ }
+    } catch (err) { console.error('[Z.AI] News sentiment failed:', err); }
   }
 
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
@@ -636,21 +636,44 @@ async function runWeeklyReview(env: Env): Promise<void> {
     try {
       const metrics = await getPerformanceMetrics(env);
       const vixVal = macroDashboard.find((m) => m.id === 'VIXCLS')?.value || 0;
+
+      // Compute real weekly P&L from closed trades in last 7 days
+      const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      const weekTrades = env.DB ? await getClosedTradesSince(env.DB, oneWeekAgo) : [];
+      const weeklyPnl = weekTrades.reduce((s, t) => s + (t.pnl ?? 0), 0);
+      const snapshot = await getPortfolioSnapshot(env);
+      const equity = snapshot?.equity || 1;
+      const weeklyPnlPct = equity > 0 ? (weeklyPnl / equity) * 100 : 0;
+      // weekTrades already sorted by pnl DESC from query
+      const topWinner = weekTrades.length > 0 && (weekTrades[0].pnl ?? 0) > 0
+        ? `${weekTrades[0].symbol} (+$${(weekTrades[0].pnl ?? 0).toFixed(0)})`
+        : 'N/A';
+      const topLoser = weekTrades.length > 0 && (weekTrades[weekTrades.length - 1].pnl ?? 0) < 0
+        ? `${weekTrades[weekTrades.length - 1].symbol} (-$${Math.abs(weekTrades[weekTrades.length - 1].pnl ?? 0).toFixed(0)})`
+        : 'N/A';
+
+      // Get current regime
+      let regimeLabel = 'unknown';
+      try {
+        const regime = await detectRegime(env);
+        if (regime) regimeLabel = regime.regime.replace('_', ' ');
+      } catch { /* regime optional */ }
+
       const narrative = await weeklyNarrative((env as any).AI, {
-        weeklyPnl: 0,
-        weeklyPnlPct: 0,
+        weeklyPnl,
+        weeklyPnlPct,
         winRate: metrics.winRate || 0,
-        totalTrades: metrics.totalTrades || 0,
-        topWinner: 'N/A',
-        topLoser: 'N/A',
-        regime: 'unknown',
+        totalTrades: weekTrades.length,
+        topWinner,
+        topLoser,
+        regime: regimeLabel,
         vix: vixVal,
       });
       if (narrative) {
         lines.push(``, `🧠 <b>Z.AI Weekly Summary:</b>`);
         lines.push(narrative);
       }
-    } catch { /* Z.AI optional */ }
+    } catch (err) { console.error('[Z.AI] Weekly narrative failed:', err); }
   }
 
   lines.push(`📌 <i>Review positions, adjust watchlist. Good week ahead!</i>`);

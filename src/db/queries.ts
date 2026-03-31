@@ -117,6 +117,13 @@ export async function getRecentTrades(db: D1Database, limit: number = 20): Promi
   return (result.results || []) as unknown as TradeRecord[];
 }
 
+export async function getClosedTradesSince(db: D1Database, sinceMs: number): Promise<TradeRecord[]> {
+  const result = await db.prepare(
+    `SELECT * FROM trades WHERE status = 'CLOSED' AND closed_at >= ? ORDER BY pnl DESC`
+  ).bind(sinceMs).all();
+  return (result.results || []) as unknown as TradeRecord[];
+}
+
 // ─── Position Queries ────────────────────────────────────────
 
 export async function upsertPosition(db: D1Database, pos: PositionRecord): Promise<void> {

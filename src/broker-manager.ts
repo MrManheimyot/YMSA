@@ -16,7 +16,7 @@ import type { Env, Signal, StockQuote, TechnicalIndicator, FibonacciResult } fro
 import type { SmartMoneyAnalysis } from './analysis/smart-money';
 import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
-import { synthesizeSignal, isZAiAvailable } from './ai/z-engine';
+import { synthesizeSignal, composeAlert, isZAiAvailable } from './ai/z-engine';
 import type { MergedTradeInfo } from './ai/z-engine';
 
 // ═══════════════════════════════════════════════════════════════
@@ -413,6 +413,37 @@ export async function flushCycle(env: Env): Promise<number> {
 
   // 1. Merge engine outputs per symbol → trade alerts
   const trades = mergeBySymbol(cycleOutputs);
+
+  // Z.AI Batch Compose: If 2+ high-confidence trades, try a composed batch alert
+  if (trades.length >= 2 && isZAiAvailable(env)) {
+    try {
+      const batchInfos: MergedTradeInfo[] = trades.slice(0, 3).map(t => ({
+        symbol: t.symbol,
+        direction: t.direction,
+        confidence: t.confidence,
+        engines: t.engines,
+        reasons: t.reasons,
+        entry: t.entry,
+        stopLoss: t.stopLoss,
+        tp1: t.tp1,
+        conflicting: t.conflicting,
+      }));
+      const composed = await composeAlert((env as any).AI, batchInfos, cycleRegime);
+      if (composed && composed.length > 20) {
+        messages.push({
+          priority: trades[0].confidence >= 80 ? 'HIGH' : 'MEDIUM',
+          text: `🧠 <b>Z.AI Multi-Signal Alert</b>\n\n${composed}`,
+          silent: false,
+        });
+        for (const t of trades.slice(0, 3)) {
+          markSent(`${t.symbol}:${t.direction}`);
+          recordTradeAlert();
+        }
+      }
+    } catch (err) { console.error('[Z.AI] Compose alert failed:', err); }
+  }
+
+  // Individual trade alerts (skip if batch compose already sent them)
   for (const trade of trades) {
     // Z.AI: Enrich with LLM reasoning if available
     let aiReasoning: string | undefined;
@@ -430,7 +461,7 @@ export async function flushCycle(env: Env): Promise<number> {
           conflicting: trade.conflicting,
         };
         aiReasoning = await synthesizeSignal((env as any).AI, tradeInfo, cycleRegime) || undefined;
-      } catch { /* Z.AI optional */ }
+      } catch (err) { console.error('[Z.AI] Signal synthesis failed:', err); }
     }
 
     const plan = planTradeAlert(trade, aiReasoning);
