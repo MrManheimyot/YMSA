@@ -2,11 +2,10 @@
 // Cloudflare Worker: 6-engine trading system → Execution → Telegram
 // v3.0: Signal generation + execution via Alpaca
 
-import type { Env, TechnicalIndicator } from './types';
+import type { Env } from './types';
 import { handleCronEvent } from './cron-handler';
 import { sendTelegramMessage } from './alert-router';
 import * as yahooFinance from './api/yahoo-finance';
-import * as taapi from './api/taapi';
 import * as coingecko from './api/coingecko';
 import * as dexscreener from './api/dexscreener';
 import * as polymarket from './api/polymarket';
@@ -14,6 +13,7 @@ import * as fred from './api/fred';
 import * as alpaca from './api/alpaca';
 import { calculateFibonacci, formatFibonacciAlert } from './analysis/fibonacci';
 import { detectSignals, calculateSignalScore } from './analysis/signals';
+import { computeIndicators } from './analysis/indicators';
 import { detectRegime } from './analysis/regime';
 import { renderDashboard, getSystemStatus } from './dashboard';
 import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
@@ -77,14 +77,14 @@ export default {
         if (!symbol) return jsonResponse({ error: 'Missing ?symbol= parameter' }, 400);
         const sym = symbol.toUpperCase();
 
-        const [quote, indicators, ohlcv] = await Promise.all([
+        const [quote, ohlcv] = await Promise.all([
           yahooFinance.getQuote(sym),
-          taapi.getBulkIndicators(sym, env),
-          yahooFinance.getOHLCV(sym, '6mo', '1d'),
+          yahooFinance.getOHLCV(sym, '2y', '1d'),
         ]);
 
         if (!quote) return jsonResponse({ error: `No data for ${sym}` }, 404);
 
+        const indicators = computeIndicators(sym, ohlcv);
         const fibonacci = ohlcv.length > 0 ? calculateFibonacci(sym, ohlcv, quote.price) : null;
         const signals = detectSignals(quote, indicators, fibonacci, env);
         const score = calculateSignalScore(signals);
@@ -114,21 +114,14 @@ export default {
       // ─── Watchlist Scan ────────────────────────────
       if (path === '/api/scan') {
         const watchlist = env.DEFAULT_WATCHLIST.split(',').map((s) => s.trim());
-        const useTaapi = url.searchParams.get('indicators') !== 'false';
         const scanOne = async (symbol: string) => {
           try {
-            const quote = await yahooFinance.getQuote(symbol);
+            const [quote, ohlcv] = await Promise.all([
+              yahooFinance.getQuote(symbol),
+              yahooFinance.getOHLCV(symbol, '2y', '1d'),
+            ]);
             if (!quote) return null;
-            let indicators: TechnicalIndicator[] = [];
-            if (useTaapi) {
-              try {
-                const result = await Promise.race([
-                  taapi.getBulkIndicators(symbol, env),
-                  new Promise<null>((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
-                ]);
-                if (result) indicators = result;
-              } catch {}
-            }
+            const indicators = computeIndicators(symbol, ohlcv);
             const signals = detectSignals(quote, indicators, null, env);
             const score = calculateSignalScore(signals);
             return { symbol, price: quote.price, changePercent: quote.changePercent, signalCount: signals.length, score, topSignals: signals.slice(0, 3).map((s) => s.title) };

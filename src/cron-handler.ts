@@ -3,7 +3,6 @@
 // v3: Autonomous execution via Alpaca (paper mode by default)
 
 import type { Env, CronJobType } from './types';
-import * as taapi from './api/taapi';
 import * as finnhub from './api/finnhub';
 import * as yahooFinance from './api/yahoo-finance';
 import * as coingecko from './api/coingecko';
@@ -12,6 +11,7 @@ import * as polymarket from './api/polymarket';
 import * as fred from './api/fred';
 import { calculateFibonacci } from './analysis/fibonacci';
 import { detectSignals } from './analysis/signals';
+import { computeIndicators } from './analysis/indicators';
 import { sendTelegramAlert, sendDailyBriefing, sendTelegramMessage } from './alert-router';
 import { scanPairs, findTradablePairs, formatPairAlert } from './agents/pairs-trading';
 import { scrapeOversoldStocks, scrape52WeekHighs, formatFinvizAlert } from './scrapers/finviz';
@@ -243,13 +243,14 @@ async function runQuickScan(env: Env): Promise<void> {
   const watchlist = getWatchlist(env);
 
   for (const symbol of watchlist) {
-    const [quote, indicators] = await Promise.all([
+    const [quote, ohlcv] = await Promise.all([
       yahooFinance.getQuote(symbol),
-      taapi.getBulkIndicators(symbol, env),
+      yahooFinance.getOHLCV(symbol, '2y', '1d'),
     ]);
 
     if (!quote) continue;
 
+    const indicators = computeIndicators(symbol, ohlcv);
     const signals = detectSignals(quote, indicators, null, env);
     const criticalSignals = signals.filter((s) => s.priority === 'CRITICAL');
 
@@ -303,14 +304,14 @@ async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
   let totalSignals = 0;
 
   for (const symbol of watchlist) {
-    const [quote, indicators, ohlcv] = await Promise.all([
+    const [quote, ohlcv] = await Promise.all([
       yahooFinance.getQuote(symbol),
-      taapi.getBulkIndicators(symbol, env),
-      yahooFinance.getOHLCV(symbol, '6mo', '1d'),
+      yahooFinance.getOHLCV(symbol, '2y', '1d'),
     ]);
 
     if (!quote) continue;
 
+    const indicators = computeIndicators(symbol, ohlcv);
     const fibonacci = ohlcv.length > 0 ? calculateFibonacci(symbol, ohlcv, quote.price) : null;
     const signals = detectSignals(quote, indicators, fibonacci, env);
 
@@ -549,7 +550,9 @@ async function runWeeklyReview(env: Env): Promise<void> {
   // Stocks with RSI
   lines.push(``, `📋 <b>Watchlist + RSI:</b>`);
   for (const quote of stockQuotes) {
-    const rsi = await taapi.getRSI(quote.symbol, env);
+    const ohlcv = await yahooFinance.getOHLCV(quote.symbol, '2y', '1d');
+    const localInds = computeIndicators(quote.symbol, ohlcv);
+    const rsi = localInds.find((i) => i.indicator === 'RSI') ?? null;
     const rsiLabel = rsi
       ? rsi.value > 70 ? '⚠️ OB'
         : rsi.value < 30 ? '⚠️ OS'
