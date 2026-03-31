@@ -16,14 +16,15 @@ import { sendTelegramAlert, sendDailyBriefing, sendTelegramMessage } from './ale
 import { scanPairs, findTradablePairs, formatPairAlert } from './agents/pairs-trading';
 import { scrapeOversoldStocks, scrape52WeekHighs, formatFinvizAlert } from './scrapers/finviz';
 import { scrapeMarketOverview, formatMarketOverview } from './scrapers/google-finance';
-import { analyzeMultiTimeframe, formatMTFAlert } from './analysis/multi-timeframe';
-import { analyzeSmartMoney, formatSmartMoneyAlert } from './analysis/smart-money';
+import { analyzeMultiTimeframe } from './analysis/multi-timeframe';
+import { analyzeSmartMoney } from './analysis/smart-money';
 import { detectRegime, getEngineAdjustments, formatRegimeAlert } from './analysis/regime';
 import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from './api/google-alerts';
 import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEnginePerformance, getPerformanceMetrics, formatPerformanceReport } from './execution/portfolio';
 import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
 import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
 import { insertRiskEvent, generateId } from './db/queries';
+import { formatSmartMoneyTradeAlert, formatMTFTradeAlert, setCurrentRegime } from './alert-formatter';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -712,7 +713,10 @@ async function runOpeningRangeBreak(env: Env): Promise<void> {
     try {
       const mtf = await analyzeMultiTimeframe(symbol, env);
       if (mtf && mtf.confluence >= 70) {
-        await sendTelegramMessage(formatMTFAlert(mtf), env);
+        const alertMsg = formatMTFTradeAlert(mtf);
+        if (alertMsg) {
+          await sendTelegramMessage(alertMsg, env);
+        }
 
         const quote = await yahooFinance.getQuote(symbol);
         if (quote) {
@@ -760,7 +764,11 @@ async function runQuickPulse(env: Env): Promise<void> {
       const smc = analyzeSmartMoney(symbol, candles, quote.price);
 
       if (smc.score >= 70) {
-        await sendTelegramMessage(formatSmartMoneyAlert(smc), env);
+        const indicators = computeIndicators(symbol, ohlcv);
+        const alertMsg = formatSmartMoneyTradeAlert(smc, quote, indicators);
+        if (alertMsg) {
+          await sendTelegramMessage(alertMsg, env);
+        }
       }
     } catch (err) {
       console.error(`[Pulse] ${symbol} error:`, err);
@@ -776,6 +784,7 @@ async function runRegimeScan(env: Env): Promise<void> {
   try {
     const regime = await detectRegime(env);
     if (regime) {
+      setCurrentRegime(regime);
       await sendTelegramMessage(formatRegimeAlert(regime), env);
       const adjustments = getEngineAdjustments(regime);
       console.log(`[v3] Regime: ${regime.regime} | Adjustments: ${JSON.stringify(adjustments)}`);
@@ -798,7 +807,11 @@ async function runMTFScan(env: Env): Promise<void> {
     try {
       const mtf = await analyzeMultiTimeframe(symbol, env);
       if (mtf && mtf.confluence >= 65) {
-        await sendTelegramMessage(formatMTFAlert(mtf), env);
+        // Use new actionable trade alert format
+        const alertMsg = formatMTFTradeAlert(mtf);
+        if (alertMsg) {
+          await sendTelegramMessage(alertMsg, env);
+        }
 
         if (mtf.confluence >= 70) {
           const quote = await yahooFinance.getQuote(symbol);
@@ -847,7 +860,12 @@ async function runSmartMoneyScan(env: Env): Promise<void> {
 
       const smc = analyzeSmartMoney(symbol, candles, quote.price);
       if (smc.score >= 60) {
-        await sendTelegramMessage(formatSmartMoneyAlert(smc), env);
+        // Use new actionable trade alert format
+        const indicators = computeIndicators(symbol, ohlcv);
+        const alertMsg = formatSmartMoneyTradeAlert(smc, quote, indicators);
+        if (alertMsg) {
+          await sendTelegramMessage(alertMsg, env);
+        }
 
         if (smc.score >= 75 && smc.overallBias !== 'NEUTRAL') {
           signals.push({

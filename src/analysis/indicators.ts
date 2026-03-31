@@ -16,7 +16,8 @@ export function computeIndicators(
   if (candles.length < 30) return [];
 
   // Reverse to chronological order (oldest first) for calculations
-  const prices = [...candles].reverse().map((c) => c.close);
+  const chronological = [...candles].reverse();
+  const prices = chronological.map((c) => c.close);
   const now = Date.now();
   const indicators: TechnicalIndicator[] = [];
 
@@ -44,6 +45,12 @@ export function computeIndicators(
     indicators.push({ symbol, indicator: 'MACD', value: macd.macd, timestamp: now, timeframe });
     indicators.push({ symbol, indicator: 'MACD_SIGNAL', value: macd.signal, signal: macd.signal, timestamp: now, timeframe });
     indicators.push({ symbol, indicator: 'MACD_HISTOGRAM', value: macd.histogram, histogram: macd.histogram, timestamp: now, timeframe });
+  }
+
+  // ATR(14)
+  const atr = calcATR(chronological, 14);
+  if (atr !== null) {
+    indicators.push({ symbol, indicator: 'ATR', value: atr, timestamp: now, timeframe });
   }
 
   return indicators;
@@ -139,4 +146,29 @@ function calcMACD(
 
   const latestMacd = macdLine[macdLine.length - 1];
   return { macd: latestMacd, signal: sigEma, histogram: latestMacd - sigEma };
+}
+
+/** Calculate ATR (Average True Range) using Wilder's smoothing */
+function calcATR(candles: OHLCV[], period: number): number | null {
+  if (candles.length < period + 1) return null;
+
+  const trueRanges: number[] = [];
+  for (let i = 1; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevClose = candles[i - 1].close;
+    trueRanges.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+
+  // Initial ATR = simple average of first `period` true ranges
+  let atr = 0;
+  for (let i = 0; i < period; i++) atr += trueRanges[i];
+  atr /= period;
+
+  // Wilder's smoothing
+  for (let i = period; i < trueRanges.length; i++) {
+    atr = (atr * (period - 1) + trueRanges[i]) / period;
+  }
+
+  return atr;
 }
