@@ -15,6 +15,8 @@ import { calculateFibonacci, formatFibonacciAlert } from './analysis/fibonacci';
 import { detectSignals, calculateSignalScore } from './analysis/signals';
 import { computeIndicators } from './analysis/indicators';
 import { detectRegime } from './analysis/regime';
+import { analyzeSmartMoney } from './analysis/smart-money';
+import { formatSmartMoneyTradeAlert, setCurrentRegime } from './alert-formatter';
 import { renderDashboard, getSystemStatus } from './dashboard';
 import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
 import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentDailyPnl, getAllLatestEnginePerformance } from './db/queries';
@@ -175,6 +177,48 @@ export default {
           env
         );
         return jsonResponse({ status: 'Test alert sent to Telegram' });
+      }
+
+      // ─── Send Live Trade Alert ─────────────────────
+      if (path === '/api/send-trade-alert') {
+        const symbols = (url.searchParams.get('symbols') || env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map(s => s.trim());
+        const sentAlerts: { symbol: string; message: string }[] = [];
+
+        // Set regime context first
+        try {
+          const regime = await detectRegime(env);
+          setCurrentRegime(regime);
+        } catch (e) { console.error('[TradeAlert] Regime error:', e); }
+
+        for (const symbol of symbols.slice(0, 5)) {
+          try {
+            const ohlcv = await yahooFinance.getOHLCV(symbol, '3mo', '1d');
+            if (ohlcv.length < 20) continue;
+
+            const candles = ohlcv.map(c => ({ open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume, timestamp: c.timestamp }));
+            const quote = await yahooFinance.getQuote(symbol);
+            if (!quote) continue;
+
+            const smc = analyzeSmartMoney(symbol, candles, quote.price);
+            if (smc.score < 40) continue; // skip weak signals
+
+            const indicators = computeIndicators(symbol, ohlcv);
+            const alertMsg = formatSmartMoneyTradeAlert(smc, quote, indicators);
+            if (alertMsg) {
+              await sendTelegramMessage(alertMsg, env);
+              sentAlerts.push({ symbol, message: alertMsg });
+            }
+          } catch (err) {
+            console.error(`[TradeAlert] ${symbol} error:`, err);
+          }
+        }
+
+        return jsonResponse({
+          status: sentAlerts.length > 0 ? 'Alerts sent to Telegram' : 'No actionable signals found',
+          count: sentAlerts.length,
+          alerts: sentAlerts,
+          timestamp: new Date().toISOString(),
+        });
       }
 
       // ─── Manual Trigger ────────────────────────────

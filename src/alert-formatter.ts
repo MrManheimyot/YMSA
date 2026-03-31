@@ -52,7 +52,9 @@ function calcTradeLevels(
   const effectiveATR = atr && atr > 0 ? atr : price * 0.02;
 
   if (direction === 'BUY') {
-    const sl = zone ? zone.low - effectiveATR * 0.25 : price - effectiveATR * 2;
+    // Only anchor SL to zone if the zone is below price (demand zone)
+    const useZone = zone && zone.low < price;
+    const sl = useZone ? zone!.low - effectiveATR * 0.25 : price - effectiveATR * 2;
     return {
       entry: price,
       stopLoss: Math.max(sl, price * 0.92), // max 8% loss
@@ -60,8 +62,9 @@ function calcTradeLevels(
       tp2: price + effectiveATR * 3.5,
     };
   }
-  // SELL
-  const sl = zone ? zone.high + effectiveATR * 0.25 : price + effectiveATR * 2;
+  // SELL — only anchor SL to zone if zone is above price (supply zone)
+  const useZone = zone && zone.high > price;
+  const sl = useZone ? zone!.high + effectiveATR * 0.25 : price + effectiveATR * 2;
   return {
     entry: price,
     stopLoss: Math.min(sl, price * 1.08),
