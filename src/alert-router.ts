@@ -1,16 +1,18 @@
 // ─── Alert Router ─────────────────────────────────────────────
 // Routes signals to Telegram
 // Uses alert-formatter for actionable trade alert formatting
+// Logs every sent alert to D1 telegram_alerts table for win/loss tracking
 
 import type { Env, Signal, AlertPriority, StockQuote, TechnicalIndicator, FibonacciResult } from './types';
 import { formatTechnicalAlert } from './alert-formatter';
+import { insertTelegramAlert, generateId, getLatestRegime } from './db/queries';
 
 // ─── Telegram ────────────────────────────────────────────────
 
 const TELEGRAM_API = 'https://api.telegram.org';
 
 /**
- * Send a formatted trade alert to Telegram
+ * Send a formatted trade alert to Telegram and log to D1
  */
 export async function sendTelegramAlert(
   signals: Signal[],
@@ -45,11 +47,69 @@ export async function sendTelegramAlert(
       return false;
     }
 
+    // Log alert to D1 for win/loss tracking
+    if (env.DB) {
+      try {
+        const action = deriveActionFromMessage(message);
+        const entryPrice = extractPrice(message, 'Entry');
+        const stopLoss = extractPrice(message, 'Stop Loss');
+        const tp1 = extractPrice(message, 'TP1');
+        const tp2 = extractPrice(message, 'TP2');
+        const confidence = extractConfidence(message);
+        const engineId = signals[0]?.type?.includes('MTF') ? 'MTF_MOMENTUM'
+          : signals[0]?.type?.includes('ORDER_BLOCK') || signals[0]?.type?.includes('LIQUIDITY') ? 'SMART_MONEY'
+          : signals[0]?.type?.includes('PAIR') ? 'STAT_ARB'
+          : signals[0]?.type?.includes('CRYPTO') || signals[0]?.type?.includes('WHALE') ? 'CRYPTO_DEFI'
+          : signals[0]?.type?.includes('EARNINGS') || signals[0]?.type?.includes('NEWS') ? 'EVENT_DRIVEN'
+          : 'TECHNICAL';
+        // Fetch latest regime from D1
+        let currentRegime: string | null = null;
+        try {
+          const regimeData = await getLatestRegime(env.DB);
+          currentRegime = regimeData?.regime ?? null;
+        } catch { /* regime lookup is best-effort */ }
+        await insertTelegramAlert(env.DB, {
+          id: generateId('tga'),
+          symbol: quote.symbol,
+          action,
+          engine_id: engineId,
+          entry_price: entryPrice || quote.price,
+          stop_loss: stopLoss,
+          take_profit_1: tp1,
+          take_profit_2: tp2,
+          confidence,
+          alert_text: message,
+          regime: currentRegime,
+          metadata: JSON.stringify({ signals: signals.map(s => ({ type: s.type, priority: s.priority, title: s.title })) }),
+          sent_at: Date.now(),
+        });
+      } catch (logErr) {
+        console.error('[Telegram] Alert log to D1 failed:', logErr);
+      }
+    }
+
     return true;
   } catch (err) {
     console.error(`[Telegram] Error:`, err);
     return false;
   }
+}
+
+// ─── Helper: extract info from alert text ────────────────────
+function deriveActionFromMessage(msg: string): 'BUY' | 'SELL' {
+  if (msg.includes('Action: BUY') || msg.includes('<b>Action: BUY</b>')) return 'BUY';
+  return 'SELL';
+}
+
+function extractPrice(msg: string, label: string): number | null {
+  const regex = new RegExp(label + ':\\s*\\$([\\d,.]+)');
+  const match = msg.match(regex);
+  return match ? parseFloat(match[1].replace(',', '')) : null;
+}
+
+function extractConfidence(msg: string): number {
+  const match = msg.match(/Confidence:<\/b>\s*(\d+)\/100/);
+  return match ? parseInt(match[1]) : 0;
 }
 
 /**

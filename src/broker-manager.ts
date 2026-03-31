@@ -18,6 +18,7 @@ import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
 import { synthesizeSignal, composeAlert, isZAiAvailable } from './ai/z-engine';
 import type { MergedTradeInfo } from './ai/z-engine';
+import { insertTelegramAlert, generateId } from './db/queries';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -509,6 +510,8 @@ export async function flushCycle(env: Env): Promise<number> {
     if (plan) {
       markSent(`${trade.symbol}:${trade.direction}`);
       recordTradeAlert();
+      // Tag the plan with trade metadata for D1 logging
+      (plan as any)._trade = trade;
       messages.push(plan);
     }
     // Budget: stop after max alerts
@@ -538,6 +541,29 @@ export async function flushCycle(env: Env): Promise<number> {
     try {
       await sendTelegramMessageEx(msg.text, env, msg.silent);
       sent++;
+      // Log trade alerts to D1 for win/loss tracking
+      const trade = (msg as any)._trade as MergedTrade | undefined;
+      if (trade && env.DB) {
+        try {
+          await insertTelegramAlert(env.DB, {
+            id: generateId('tga'),
+            symbol: trade.symbol,
+            action: trade.direction as 'BUY' | 'SELL',
+            engine_id: trade.engines.join('+'),
+            entry_price: trade.entry,
+            stop_loss: trade.stopLoss,
+            take_profit_1: trade.tp1,
+            take_profit_2: trade.tp2,
+            confidence: trade.confidence,
+            alert_text: msg.text,
+            regime: cycleRegime?.regime || null,
+            metadata: JSON.stringify({ engines: trade.engines, reasons: trade.reasons, signals: trade.signals }),
+            sent_at: Date.now(),
+          });
+        } catch (logErr) {
+          console.error('[Broker] Alert D1 log failed:', logErr);
+        }
+      }
     } catch (err) {
       console.error('[Broker] Send failed:', err);
     }

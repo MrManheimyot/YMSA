@@ -356,3 +356,237 @@ export async function upsertKillSwitchState(
        updated_at = excluded.updated_at`
   ).bind(tier, tier !== 'NONE' ? now : null, dailyPnlPct, reason, now, now).run();
 }
+
+// ─── Telegram Alert Log Queries ─────────────────────────────
+
+export interface TelegramAlertRecord {
+  id: string;
+  symbol: string;
+  action: 'BUY' | 'SELL';
+  engine_id: string;
+  entry_price: number;
+  stop_loss: number | null;
+  take_profit_1: number | null;
+  take_profit_2: number | null;
+  confidence: number;
+  alert_text: string;
+  outcome: 'PENDING' | 'WIN' | 'LOSS' | 'BREAKEVEN' | 'EXPIRED';
+  outcome_price: number | null;
+  outcome_pnl: number | null;
+  outcome_pnl_pct: number | null;
+  outcome_notes: string | null;
+  outcome_at: number | null;
+  regime: string | null;
+  metadata: string | null;
+  sent_at: number;
+}
+
+export async function insertTelegramAlert(db: D1Database, alert: Omit<TelegramAlertRecord, 'outcome' | 'outcome_price' | 'outcome_pnl' | 'outcome_pnl_pct' | 'outcome_notes' | 'outcome_at'>): Promise<void> {
+  await db.prepare(
+    `INSERT INTO telegram_alerts (id, symbol, action, engine_id, entry_price, stop_loss, take_profit_1, take_profit_2, confidence, alert_text, outcome, regime, metadata, sent_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`
+  ).bind(
+    alert.id, alert.symbol, alert.action, alert.engine_id,
+    alert.entry_price, alert.stop_loss, alert.take_profit_1, alert.take_profit_2,
+    alert.confidence, alert.alert_text, alert.regime, alert.metadata, alert.sent_at
+  ).run();
+}
+
+export async function updateTelegramAlertOutcome(
+  db: D1Database,
+  id: string,
+  outcome: 'WIN' | 'LOSS' | 'BREAKEVEN' | 'EXPIRED',
+  outcomePrice: number | null,
+  outcomePnl: number | null,
+  outcomePnlPct: number | null,
+  outcomeNotes: string | null
+): Promise<void> {
+  await db.prepare(
+    `UPDATE telegram_alerts SET outcome = ?, outcome_price = ?, outcome_pnl = ?, outcome_pnl_pct = ?, outcome_notes = ?, outcome_at = ? WHERE id = ?`
+  ).bind(outcome, outcomePrice, outcomePnl, outcomePnlPct, outcomeNotes, Date.now(), id).run();
+}
+
+export async function getRecentTelegramAlerts(db: D1Database, limit: number = 50): Promise<TelegramAlertRecord[]> {
+  const result = await db.prepare(
+    `SELECT * FROM telegram_alerts ORDER BY sent_at DESC LIMIT ?`
+  ).bind(limit).all();
+  return (result.results || []) as unknown as TelegramAlertRecord[];
+}
+
+export async function getTelegramAlertById(db: D1Database, id: string): Promise<TelegramAlertRecord | null> {
+  const result = await db.prepare(
+    `SELECT * FROM telegram_alerts WHERE id = ?`
+  ).bind(id).first();
+  return result as unknown as TelegramAlertRecord | null;
+}
+
+export async function getTelegramAlertStats(db: D1Database): Promise<{
+  total: number;
+  wins: number;
+  losses: number;
+  pending: number;
+  breakeven: number;
+  expired: number;
+  winRate: number;
+  avgWinPnl: number;
+  avgLossPnl: number;
+  totalPnl: number;
+  profitFactor: number;
+  bestTrade: TelegramAlertRecord | null;
+  worstTrade: TelegramAlertRecord | null;
+}> {
+  const all = await db.prepare(`SELECT * FROM telegram_alerts ORDER BY sent_at DESC`).all();
+  const alerts = (all.results || []) as unknown as TelegramAlertRecord[];
+  const resolved = alerts.filter(a => a.outcome !== 'PENDING');
+  const wins = alerts.filter(a => a.outcome === 'WIN');
+  const losses = alerts.filter(a => a.outcome === 'LOSS');
+  const pending = alerts.filter(a => a.outcome === 'PENDING');
+  const breakeven = alerts.filter(a => a.outcome === 'BREAKEVEN');
+  const expired = alerts.filter(a => a.outcome === 'EXPIRED');
+
+  const totalWinPnl = wins.reduce((s, a) => s + (a.outcome_pnl || 0), 0);
+  const totalLossPnl = Math.abs(losses.reduce((s, a) => s + (a.outcome_pnl || 0), 0));
+
+  const sorted = [...resolved].sort((a, b) => (b.outcome_pnl || 0) - (a.outcome_pnl || 0));
+
+  return {
+    total: alerts.length,
+    wins: wins.length,
+    losses: losses.length,
+    pending: pending.length,
+    breakeven: breakeven.length,
+    expired: expired.length,
+    winRate: resolved.length > 0 ? wins.length / resolved.length : 0,
+    avgWinPnl: wins.length > 0 ? totalWinPnl / wins.length : 0,
+    avgLossPnl: losses.length > 0 ? totalLossPnl / losses.length : 0,
+    totalPnl: totalWinPnl - totalLossPnl,
+    profitFactor: totalLossPnl > 0 ? totalWinPnl / totalLossPnl : totalWinPnl > 0 ? Infinity : 0,
+    bestTrade: sorted[0] || null,
+    worstTrade: sorted[sorted.length - 1] || null,
+  };
+}
+
+export async function getPnlDashboardData(db: D1Database): Promise<{
+  dailyPnl: DailyPnlRecord[];
+  monthlyPnl: Array<{ month: string; pnl: number; pnl_pct: number; trades: number; win_rate: number }>;
+  equityCurve: Array<{ date: string; equity: number }>;
+  drawdownSeries: Array<{ date: string; drawdown_pct: number }>;
+  tradesByEngine: Array<{ engine_id: string; count: number; pnl: number; win_rate: number }>;
+  tradesBySymbol: Array<{ symbol: string; count: number; pnl: number; win_rate: number }>;
+  streaks: { currentStreak: number; currentType: 'WIN' | 'LOSS' | 'NONE'; longestWin: number; longestLoss: number };
+}> {
+  // Daily P&L (all time)
+  const dailyResult = await db.prepare(`SELECT * FROM daily_pnl ORDER BY date ASC`).all();
+  const dailyPnl = (dailyResult.results || []) as unknown as DailyPnlRecord[];
+
+  // Equity curve from daily_pnl
+  const equityCurve = dailyPnl.map(d => ({ date: d.date, equity: d.total_equity }));
+
+  // Drawdown series
+  let peak = 0;
+  const drawdownSeries = dailyPnl.map(d => {
+    if (d.total_equity > peak) peak = d.total_equity;
+    const dd = peak > 0 ? ((d.total_equity - peak) / peak) * 100 : 0;
+    return { date: d.date, drawdown_pct: dd };
+  });
+
+  // Monthly P&L aggregation
+  const monthMap = new Map<string, { pnl: number; pnl_pcts: number[]; trades: number; wins: number; total_resolved: number }>();
+  for (const d of dailyPnl) {
+    const month = d.date.slice(0, 7); // YYYY-MM
+    const entry = monthMap.get(month) || { pnl: 0, pnl_pcts: [], trades: 0, wins: 0, total_resolved: 0 };
+    entry.pnl += d.daily_pnl;
+    entry.pnl_pcts.push(d.daily_pnl_pct);
+    entry.trades += d.trades_today;
+    if (d.win_rate > 0) {
+      entry.wins += Math.round(d.win_rate * d.trades_today);
+      entry.total_resolved += d.trades_today;
+    }
+    monthMap.set(month, entry);
+  }
+  const monthlyPnl = [...monthMap.entries()].map(([month, data]) => ({
+    month,
+    pnl: data.pnl,
+    pnl_pct: data.pnl_pcts.reduce((s, v) => s + v, 0),
+    trades: data.trades,
+    win_rate: data.total_resolved > 0 ? data.wins / data.total_resolved : 0,
+  }));
+
+  // Trades by engine
+  const engineResult = await db.prepare(
+    `SELECT engine_id,
+            COUNT(*) as count,
+            SUM(CASE WHEN pnl IS NOT NULL THEN pnl ELSE 0 END) as pnl,
+            CAST(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS REAL) / NULLIF(SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END), 0) as win_rate
+     FROM trades GROUP BY engine_id`
+  ).all();
+  const tradesByEngine = (engineResult.results || []) as unknown as Array<{ engine_id: string; count: number; pnl: number; win_rate: number }>;
+
+  // Trades by symbol (top 20)
+  const symbolResult = await db.prepare(
+    `SELECT symbol,
+            COUNT(*) as count,
+            SUM(CASE WHEN pnl IS NOT NULL THEN pnl ELSE 0 END) as pnl,
+            CAST(SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) AS REAL) / NULLIF(SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END), 0) as win_rate
+     FROM trades GROUP BY symbol ORDER BY count DESC LIMIT 20`
+  ).all();
+  const tradesBySymbol = (symbolResult.results || []) as unknown as Array<{ symbol: string; count: number; pnl: number; win_rate: number }>;
+
+  // Win/Loss streaks
+  const closedTrades = await db.prepare(
+    `SELECT pnl FROM trades WHERE status = 'CLOSED' ORDER BY closed_at ASC`
+  ).all();
+  const closedPnls = ((closedTrades.results || []) as unknown as Array<{ pnl: number }>).map(t => t.pnl);
+  
+  let currentStreak = 0;
+  let currentType: 'WIN' | 'LOSS' | 'NONE' = 'NONE';
+  let longestWin = 0;
+  let longestLoss = 0;
+  let winStreak = 0;
+  let lossStreak = 0;
+  for (const pnl of closedPnls) {
+    if (pnl > 0) {
+      winStreak++;
+      lossStreak = 0;
+      if (winStreak > longestWin) longestWin = winStreak;
+    } else if (pnl < 0) {
+      lossStreak++;
+      winStreak = 0;
+      if (lossStreak > longestLoss) longestLoss = lossStreak;
+    }
+  }
+  if (closedPnls.length > 0) {
+    const last = closedPnls[closedPnls.length - 1];
+    currentType = last > 0 ? 'WIN' : last < 0 ? 'LOSS' : 'NONE';
+    currentStreak = currentType === 'WIN' ? winStreak : currentType === 'LOSS' ? lossStreak : 0;
+  }
+
+  return {
+    dailyPnl,
+    monthlyPnl,
+    equityCurve,
+    drawdownSeries,
+    tradesByEngine,
+    tradesBySymbol,
+    streaks: { currentStreak, currentType, longestWin, longestLoss },
+  };
+}
+
+// ─── Pending Alert Resolution Helpers ────────────────────────
+
+/** Get all PENDING alerts (for auto-resolution against current prices) */
+export async function getPendingTelegramAlerts(db: D1Database): Promise<TelegramAlertRecord[]> {
+  const result = await db.prepare(
+    `SELECT * FROM telegram_alerts WHERE outcome = 'PENDING' ORDER BY sent_at ASC`
+  ).all();
+  return (result.results || []) as unknown as TelegramAlertRecord[];
+}
+
+/** Expire PENDING alerts older than the given age in milliseconds */
+export async function expireOldTelegramAlerts(db: D1Database, maxAgeMs: number): Promise<number> {
+  const cutoff = Date.now() - maxAgeMs;
+  const result = await db.prepare(
+    `UPDATE telegram_alerts SET outcome = 'EXPIRED', outcome_at = ?, outcome_notes = 'Auto-expired after timeout' WHERE outcome = 'PENDING' AND sent_at < ?`
+  ).bind(Date.now(), cutoff).run();
+  return result.meta?.changes ?? 0;
+}

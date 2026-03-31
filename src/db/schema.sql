@@ -166,3 +166,32 @@ CREATE TABLE IF NOT EXISTS kill_switch_state (
   reason TEXT,
   updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
+
+-- ─── Telegram Alert Log (every alert sent via Telegram) ──────
+DROP TABLE IF EXISTS telegram_alerts;
+CREATE TABLE telegram_alerts (
+  id TEXT PRIMARY KEY,
+  symbol TEXT NOT NULL,
+  action TEXT NOT NULL,               -- BUY, SELL
+  engine_id TEXT NOT NULL,            -- Which engine generated the signal
+  entry_price REAL NOT NULL,
+  stop_loss REAL,
+  take_profit_1 REAL,
+  take_profit_2 REAL,
+  confidence INTEGER DEFAULT 0,
+  alert_text TEXT NOT NULL,           -- Full Telegram message
+  outcome TEXT DEFAULT 'PENDING',     -- PENDING, WIN, LOSS, BREAKEVEN, EXPIRED
+  outcome_price REAL,                 -- Price when outcome was determined
+  outcome_pnl REAL,                   -- Realized dollar P&L
+  outcome_pnl_pct REAL,              -- Realized % P&L
+  outcome_notes TEXT,                 -- Notes on outcome
+  outcome_at INTEGER,                 -- When outcome was resolved
+  regime TEXT,                        -- Market regime at time of alert
+  metadata TEXT,                      -- JSON blob with supporting signals etc.
+  sent_at INTEGER NOT NULL
+);
+
+CREATE INDEX idx_tg_alerts_symbol ON telegram_alerts(symbol);
+CREATE INDEX idx_tg_alerts_outcome ON telegram_alerts(outcome);
+CREATE INDEX idx_tg_alerts_sent ON telegram_alerts(sent_at);
+CREATE INDEX idx_tg_alerts_engine ON telegram_alerts(engine_id);

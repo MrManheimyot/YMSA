@@ -104,6 +104,12 @@ export function getSystemStatus(env: Env): SystemStatus {
       'GET /api/daily-pnl?days=14', 'GET /api/engine-stats',
       'GET /api/news?category=&limit=30&fresh=true',
       'GET /api/test-alert',
+      'GET /api/telegram-alerts?limit=50',
+      'GET /api/telegram-alert?id=',
+      'GET /api/telegram-alert-stats',
+      'POST /api/telegram-alert-outcome',
+      'GET /api/pnl-dashboard',
+      'GET /api/dashboard-data',
       'GET /api/trigger?job=morning|open|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
     ],
     riskLimits: {
@@ -282,6 +288,77 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
 /* Loading */
 .loading{color:var(--c-on-surface-2);font-size:12px;padding:12px;text-align:center}
 .empty{color:var(--c-on-surface-2);font-size:12px;padding:16px;text-align:center;font-style:italic}
+
+/* ═══ WIN/LOSS TABLE ═══ */
+.wl-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.wl-filter-btn{padding:5px 14px;border-radius:16px;font-size:11px;font-weight:500;border:1px solid var(--c-outline);background:transparent;color:var(--c-on-surface-2);cursor:pointer;transition:all .2s}
+.wl-filter-btn.active{background:var(--c-primary-ctr);color:var(--c-primary);border-color:var(--c-primary)}
+.wl-filter-btn:hover{border-color:var(--c-primary);color:var(--c-primary)}
+.wl-row{cursor:pointer;transition:background .15s}
+.wl-row:hover td{background:rgba(128,203,196,.08)!important}
+.wl-outcome{padding:2px 10px;border-radius:12px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
+.wl-outcome.WIN{background:rgba(63,185,80,.15);color:var(--c-buy)}
+.wl-outcome.LOSS{background:rgba(248,81,73,.15);color:var(--c-sell)}
+.wl-outcome.PENDING{background:rgba(128,203,196,.15);color:var(--c-primary)}
+.wl-outcome.BREAKEVEN{background:rgba(176,190,197,.15);color:var(--c-secondary)}
+.wl-outcome.EXPIRED{background:rgba(176,190,197,.1);color:var(--c-on-surface-2)}
+.wl-stats-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px}
+@media(max-width:900px){.wl-stats-row{grid-template-columns:repeat(3,1fr)}}
+.wl-stat{background:var(--c-surface-2);border-radius:var(--radius-s);padding:12px;text-align:center}
+.wl-stat .label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--c-on-surface-2);margin-bottom:4px}
+.wl-stat .val{font-family:'Roboto Mono',monospace;font-size:18px;font-weight:700}
+.wl-action-btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.wl-action-btn{padding:4px 12px;border-radius:12px;font-size:10px;font-weight:500;border:none;cursor:pointer;transition:filter .15s}
+.wl-action-btn:hover{filter:brightness(1.2)}
+.wl-action-btn.win{background:rgba(63,185,80,.2);color:var(--c-buy)}
+.wl-action-btn.loss{background:rgba(248,81,73,.2);color:var(--c-sell)}
+.wl-action-btn.be{background:rgba(176,190,197,.2);color:var(--c-secondary)}
+.wl-action-btn.exp{background:rgba(176,190,197,.15);color:var(--c-on-surface-2)}
+
+/* ═══ MODAL ═══ */
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px}
+.modal-overlay.active{display:flex}
+.modal{background:var(--c-surface-1);border:1px solid var(--c-outline);border-radius:var(--radius-l);max-width:680px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.6);animation:modalIn .2s ease-out}
+@keyframes modalIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.modal-header{display:flex;align-items:center;justify-content:space-between;padding:20px 24px;border-bottom:1px solid var(--c-outline);position:sticky;top:0;background:var(--c-surface-1);z-index:1}
+.modal-header h2{font-size:16px;font-weight:600;color:var(--c-on-surface);display:flex;align-items:center;gap:8px}
+.modal-close{width:32px;height:32px;border-radius:50%;border:none;background:var(--c-surface-2);color:var(--c-on-surface-2);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.modal-close:hover{background:var(--c-surface-3);color:var(--c-on-surface)}
+.modal-body{padding:20px 24px}
+.modal-section{margin-bottom:20px}
+.modal-section-title{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:1px;color:var(--c-on-surface-2);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.modal-kv{display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-size:12px}
+.modal-kv .k{color:var(--c-on-surface-2)}.modal-kv .v{font-family:'Roboto Mono',monospace;font-weight:500;text-align:right}
+.modal-alert-text{font-family:'Roboto Mono',monospace;font-size:11px;background:var(--c-surface);border-radius:var(--radius-s);padding:14px;white-space:pre-wrap;word-break:break-word;color:var(--c-on-surface-2);max-height:240px;overflow-y:auto;border:1px solid var(--c-outline)}
+.modal-outcome-form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.modal-outcome-form select,.modal-outcome-form input{padding:6px 12px;border-radius:8px;border:1px solid var(--c-outline);background:var(--c-surface-2);color:var(--c-on-surface);font-size:12px;font-family:'Roboto Mono',monospace}
+.modal-outcome-form button{padding:6px 16px;border-radius:8px;border:none;background:var(--c-primary-ctr);color:var(--c-primary);font-size:12px;font-weight:500;cursor:pointer;transition:filter .15s}
+.modal-outcome-form button:hover{filter:brightness(1.2)}
+
+/* ═══ P&L DASHBOARD ═══ */
+.pnl-hero{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+@media(max-width:900px){.pnl-hero{grid-template-columns:repeat(2,1fr)}}
+.pnl-chart-container{position:relative;height:200px;background:var(--c-surface);border-radius:var(--radius-s);padding:12px;overflow:hidden}
+.pnl-chart-container canvas{width:100%!important;height:100%!important}
+.pnl-monthly-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px}
+.pnl-month-cell{padding:10px 8px;border-radius:var(--radius-s);text-align:center;font-family:'Roboto Mono',monospace;font-size:11px;font-weight:600;transition:transform .15s}
+.pnl-month-cell:hover{transform:scale(1.05)}
+.pnl-month-cell .month-label{font-size:9px;font-weight:400;color:var(--c-on-surface-2);margin-bottom:2px;display:block}
+.pnl-bar-chart{display:flex;align-items:flex-end;gap:3px;height:120px;padding:8px 0}
+.pnl-bar{flex:1;min-width:0;border-radius:2px 2px 0 0;position:relative;transition:height .3s}
+.pnl-bar:hover{opacity:.8}
+.pnl-bar .bar-tip{position:absolute;top:-18px;left:50%;transform:translateX(-50%);font-size:8px;white-space:nowrap;color:var(--c-on-surface-2);display:none}
+.pnl-bar:hover .bar-tip{display:block}
+.pnl-breakdown-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:900px){.pnl-breakdown-grid{grid-template-columns:1fr}}
+.pnl-streak-badge{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border-radius:12px;font-size:11px;font-weight:500}
+.pnl-streak-badge.win{background:rgba(63,185,80,.15);color:var(--c-buy)}
+.pnl-streak-badge.loss{background:rgba(248,81,73,.15);color:var(--c-sell)}
+.tab-bar{display:flex;gap:2px;background:var(--c-surface-2);border-radius:var(--radius-s);padding:2px;margin-bottom:12px}
+.tab-btn{flex:1;padding:8px 16px;border:none;border-radius:6px;font-size:11px;font-weight:500;background:transparent;color:var(--c-on-surface-2);cursor:pointer;transition:all .2s}
+.tab-btn.active{background:var(--c-primary-ctr);color:var(--c-primary)}
+.tab-btn:hover:not(.active){color:var(--c-on-surface)}
+.tab-content{display:none}.tab-content.active{display:block}
 </style>
 </head>
 <body>
@@ -479,6 +556,131 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
     <div class="card" id="config-panel" style="font-family:'Roboto Mono',monospace;font-size:11px;white-space:pre-wrap;color:var(--c-on-surface-2)">Loading...</div>
   </div>
 
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- v3.1: WIN/LOSS TELEGRAM ALERTS TABLE                    -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="section" id="wl-section">
+    <div class="section-hdr">🏆 Win/Loss — Telegram Alert Tracker</div>
+    <div class="card">
+      <!-- Stats Row -->
+      <div class="wl-stats-row" id="wl-stats-row">
+        <div class="wl-stat"><div class="label">Total Alerts</div><div class="val" id="wl-total">—</div></div>
+        <div class="wl-stat"><div class="label">Wins</div><div class="val up" id="wl-wins">—</div></div>
+        <div class="wl-stat"><div class="label">Losses</div><div class="val down" id="wl-losses">—</div></div>
+        <div class="wl-stat"><div class="label">Win Rate</div><div class="val" id="wl-winrate">—</div></div>
+        <div class="wl-stat"><div class="label">Total P&L</div><div class="val" id="wl-pnl">—</div></div>
+        <div class="wl-stat"><div class="label">Profit Factor</div><div class="val" id="wl-pf">—</div></div>
+      </div>
+      <!-- Filters -->
+      <div class="wl-filters">
+        <button class="wl-filter-btn active" onclick="filterWLAlerts('ALL')">All</button>
+        <button class="wl-filter-btn" onclick="filterWLAlerts('PENDING')">⏳ Pending</button>
+        <button class="wl-filter-btn" onclick="filterWLAlerts('WIN')">✅ Wins</button>
+        <button class="wl-filter-btn" onclick="filterWLAlerts('LOSS')">❌ Losses</button>
+        <button class="wl-filter-btn" onclick="filterWLAlerts('BREAKEVEN')">➖ Breakeven</button>
+        <button class="wl-filter-btn" onclick="filterWLAlerts('EXPIRED')">⏰ Expired</button>
+      </div>
+      <!-- Table -->
+      <div style="overflow-x:auto">
+        <table class="tbl">
+          <thead><tr>
+            <th>Date</th><th>Symbol</th><th>Action</th><th>Engine</th><th>Entry</th><th>SL</th><th>TP1</th><th>Conf</th><th>Outcome</th><th>P&L</th>
+          </tr></thead>
+          <tbody id="wl-body"><tr><td colspan="10" class="loading">Loading alerts...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- v3.1: P&L ANALYTICS DASHBOARD                          -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="section" id="pnl-section">
+    <div class="section-hdr">📊 P&L Analytics Dashboard</div>
+
+    <!-- P&L Hero Metrics -->
+    <div class="pnl-hero" id="pnl-hero">
+      <div class="card"><div class="card-title">Cumulative P&L</div><div class="card-value" id="pnl-cumulative">—</div><div class="card-sub">All-time realized</div></div>
+      <div class="card"><div class="card-title">Best Month</div><div class="card-value up" id="pnl-best-month">—</div><div class="card-sub" id="pnl-best-month-label">—</div></div>
+      <div class="card"><div class="card-title">Max Drawdown</div><div class="card-value down" id="pnl-max-dd">—</div><div class="card-sub">Peak-to-trough</div></div>
+      <div class="card"><div class="card-title">Current Streak</div><div id="pnl-streak" class="card-value">—</div><div class="card-sub" id="pnl-streak-sub">—</div></div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="tab-bar">
+      <button class="tab-btn active" onclick="switchPnlTab('equity', this)">📈 Equity Curve</button>
+      <button class="tab-btn" onclick="switchPnlTab('drawdown', this)">📉 Drawdown</button>
+      <button class="tab-btn" onclick="switchPnlTab('monthly', this)">📅 Monthly Returns</button>
+      <button class="tab-btn" onclick="switchPnlTab('daily', this)">📊 Daily P&L</button>
+      <button class="tab-btn" onclick="switchPnlTab('breakdown', this)">🔍 Breakdown</button>
+    </div>
+
+    <!-- Tab: Equity Curve -->
+    <div class="tab-content active" id="tab-equity">
+      <div class="card">
+        <div class="card-title">Equity Curve</div>
+        <div class="pnl-chart-container"><canvas id="equity-canvas"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Tab: Drawdown -->
+    <div class="tab-content" id="tab-drawdown">
+      <div class="card">
+        <div class="card-title">Drawdown from Peak</div>
+        <div class="pnl-chart-container"><canvas id="drawdown-canvas"></canvas></div>
+      </div>
+    </div>
+
+    <!-- Tab: Monthly Returns Heatmap -->
+    <div class="tab-content" id="tab-monthly">
+      <div class="card">
+        <div class="card-title">Monthly Returns Heatmap</div>
+        <div class="pnl-monthly-grid" id="pnl-monthly-grid"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Daily P&L Bars -->
+    <div class="tab-content" id="tab-daily">
+      <div class="card">
+        <div class="card-title">Daily P&L (Last 60 Days)</div>
+        <div class="pnl-bar-chart" id="pnl-daily-bars"></div>
+      </div>
+    </div>
+
+    <!-- Tab: Breakdown by Engine & Symbol -->
+    <div class="tab-content" id="tab-breakdown">
+      <div class="pnl-breakdown-grid">
+        <div class="card">
+          <div class="card-title">P&L by Engine</div>
+          <table class="tbl" id="pnl-engine-table">
+            <thead><tr><th>Engine</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr></thead>
+            <tbody id="pnl-engine-body"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
+          </table>
+        </div>
+        <div class="card">
+          <div class="card-title">P&L by Symbol (Top 20)</div>
+          <table class="tbl" id="pnl-symbol-table">
+            <thead><tr><th>Symbol</th><th>Trades</th><th>Win Rate</th><th>P&L</th></tr></thead>
+            <tbody id="pnl-symbol-body"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ALERT DETAIL MODAL ═══ -->
+  <div class="modal-overlay" id="alert-modal" onclick="if(event.target===this)closeAlertModal()">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 id="modal-title">Alert Detail</h2>
+        <button class="modal-close" onclick="closeAlertModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <div class="refresh-bar"><div class="refresh-bar-fill" id="refresh-bar"></div></div>
@@ -499,7 +701,7 @@ function safeFetch(path) { return fetch(BASE + path, {credentials:'include'}).th
 
 // ─── Main Load ───────────────────────────────────
 async function loadDashboard() {
-  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats] = await Promise.all([
+  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats, dashData] = await Promise.all([
     safeFetch('/api/system-status'),
     safeFetch('/api/portfolio'),
     safeFetch('/api/regime'),
@@ -511,6 +713,7 @@ async function loadDashboard() {
     safeFetch('/api/performance'),
     safeFetch('/api/daily-pnl?days=14'),
     safeFetch('/api/engine-stats'),
+    safeFetch('/api/dashboard-data'),
   ]);
 
   if (status) renderStatus(status, engineStats);
@@ -522,6 +725,8 @@ async function loadDashboard() {
   renderPositions(positions);
   renderNews(news);
   renderSparkline(dailyPnl);
+  renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats);
+  renderPnlDashboard(dashData?.pnlDash);
   $('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
@@ -868,6 +1073,370 @@ async function runTest(path, targetId) {
   } catch (err) {
     el.textContent = 'ERROR: ' + err.message;
     el.style.color = 'var(--c-error)';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// WIN/LOSS TELEGRAM ALERT TABLE
+// ═══════════════════════════════════════════════════════════
+
+let allTgAlerts = [];
+let currentWLFilter = 'ALL';
+
+function renderWinLossTable(data, stats) {
+  allTgAlerts = data?.alerts || [];
+  // Stats
+  if (stats) {
+    $('wl-total').textContent = stats.total || '0';
+    $('wl-wins').textContent = stats.wins || '0';
+    $('wl-losses').textContent = stats.losses || '0';
+    $('wl-winrate').textContent = stats.total > 0 ? fmt(stats.winRate * 100, 1) + '%' : '—';
+    $('wl-winrate').className = 'val ' + (stats.winRate > 0.5 ? 'up' : stats.winRate < 0.4 ? 'down' : '');
+    $('wl-pnl').textContent = fmtUsd(stats.totalPnl);
+    $('wl-pnl').className = 'val ' + pnlClass(stats.totalPnl);
+    $('wl-pf').textContent = stats.profitFactor === Infinity ? '∞' : fmt(stats.profitFactor, 2);
+    $('wl-pf').className = 'val ' + (stats.profitFactor >= 1.5 ? 'up' : stats.profitFactor < 1 ? 'down' : '');
+  }
+  renderWLRows(allTgAlerts);
+}
+
+function filterWLAlerts(filter) {
+  currentWLFilter = filter;
+  // Update button states
+  document.querySelectorAll('.wl-filter-btn').forEach(b => b.classList.remove('active'));
+  event.target.classList.add('active');
+  const filtered = filter === 'ALL' ? allTgAlerts : allTgAlerts.filter(a => a.outcome === filter);
+  renderWLRows(filtered);
+}
+
+function renderWLRows(alerts) {
+  const body = $('wl-body');
+  if (!alerts.length) {
+    body.innerHTML = '<tr><td colspan="10" class="empty">No alerts ' + (currentWLFilter !== 'ALL' ? 'with status ' + currentWLFilter : 'recorded yet') + '</td></tr>';
+    return;
+  }
+  body.innerHTML = alerts.map(a => {
+    const pnl = a.outcome_pnl;
+    const pnlColor = pnl > 0 ? 'var(--c-buy)' : pnl < 0 ? 'var(--c-sell)' : 'var(--c-on-surface-2)';
+    const actionColor = a.action === 'BUY' ? 'var(--c-buy)' : 'var(--c-sell)';
+    return \`<tr class="wl-row" onclick="openAlertModal('\${a.id}')">
+      <td class="mono" style="font-size:10px">\${ts(a.sent_at)}</td>
+      <td class="mono" style="font-weight:600">\${a.symbol}</td>
+      <td style="color:\${actionColor};font-weight:600">\${a.action}</td>
+      <td class="mono" style="font-size:10px">\${a.engine_id}</td>
+      <td class="mono">\${fmtUsd(a.entry_price)}</td>
+      <td class="mono">\${a.stop_loss ? fmtUsd(a.stop_loss) : '—'}</td>
+      <td class="mono">\${a.take_profit_1 ? fmtUsd(a.take_profit_1) : '—'}</td>
+      <td class="mono">\${a.confidence}/100</td>
+      <td><span class="wl-outcome \${a.outcome}">\${a.outcome}</span></td>
+      <td class="mono" style="color:\${pnlColor}">\${pnl != null ? fmtUsd(pnl) : '—'}</td>
+    </tr>\`;
+  }).join('');
+}
+
+// ─── Alert Detail Modal ──────────────────────────
+async function openAlertModal(id) {
+  const modal = $('alert-modal');
+  modal.classList.add('active');
+  $('modal-body').innerHTML = '<div class="loading">Loading alert details...</div>';
+  $('modal-title').textContent = 'Alert Detail';
+
+  const alert = await safeFetch('/api/telegram-alert?id=' + encodeURIComponent(id));
+  if (!alert) {
+    $('modal-body').innerHTML = '<div class="empty">Could not load alert</div>';
+    return;
+  }
+
+  const actionColor = alert.action === 'BUY' ? 'var(--c-buy)' : 'var(--c-sell)';
+  const pnlColor = alert.outcome_pnl > 0 ? 'var(--c-buy)' : alert.outcome_pnl < 0 ? 'var(--c-sell)' : 'var(--c-on-surface-2)';
+  const outcomeClass = alert.outcome || 'PENDING';
+
+  $('modal-title').innerHTML = \`<span style="color:\${actionColor}">\${alert.action}</span> \${alert.symbol} <span class="wl-outcome \${outcomeClass}" style="margin-left:8px">\${alert.outcome}</span>\`;
+
+  let metadata = {};
+  try { metadata = JSON.parse(alert.metadata || '{}'); } catch {}
+
+  $('modal-body').innerHTML = \`
+    <div class="modal-section">
+      <div class="modal-section-title">📋 Trade Setup</div>
+      <div class="modal-kv">
+        <span class="k">Symbol</span><span class="v" style="font-weight:700">\${alert.symbol}</span>
+        <span class="k">Action</span><span class="v" style="color:\${actionColor}">\${alert.action}</span>
+        <span class="k">Engine</span><span class="v">\${alert.engine_id}</span>
+        <span class="k">Entry Price</span><span class="v">\${fmtUsd(alert.entry_price)}</span>
+        <span class="k">Stop Loss</span><span class="v">\${alert.stop_loss ? fmtUsd(alert.stop_loss) : '—'}</span>
+        <span class="k">Take Profit 1</span><span class="v">\${alert.take_profit_1 ? fmtUsd(alert.take_profit_1) : '—'}</span>
+        <span class="k">Take Profit 2</span><span class="v">\${alert.take_profit_2 ? fmtUsd(alert.take_profit_2) : '—'}</span>
+        <span class="k">Confidence</span><span class="v">\${alert.confidence}/100</span>
+        <span class="k">Regime</span><span class="v">\${alert.regime || '—'}</span>
+        <span class="k">Sent At</span><span class="v">\${ts(alert.sent_at)}</span>
+      </div>
+    </div>
+
+    <div class="modal-section">
+      <div class="modal-section-title">📊 Outcome</div>
+      <div class="modal-kv">
+        <span class="k">Status</span><span class="v"><span class="wl-outcome \${outcomeClass}">\${alert.outcome}</span></span>
+        <span class="k">Outcome Price</span><span class="v">\${alert.outcome_price ? fmtUsd(alert.outcome_price) : '—'}</span>
+        <span class="k">P&L</span><span class="v" style="color:\${pnlColor}">\${alert.outcome_pnl != null ? fmtUsd(alert.outcome_pnl) : '—'}</span>
+        <span class="k">P&L %</span><span class="v" style="color:\${pnlColor}">\${alert.outcome_pnl_pct != null ? fmtPct(alert.outcome_pnl_pct) : '—'}</span>
+        <span class="k">Resolved At</span><span class="v">\${alert.outcome_at ? ts(alert.outcome_at) : '—'}</span>
+        <span class="k">Notes</span><span class="v" style="font-size:10px;text-align:left;grid-column:span 2">\${alert.outcome_notes || '—'}</span>
+      </div>
+    </div>
+
+    \${alert.outcome === 'PENDING' ? \`
+    <div class="modal-section">
+      <div class="modal-section-title">✏️ Update Outcome</div>
+      <div class="modal-outcome-form" id="outcome-form">
+        <select id="outcome-select">
+          <option value="WIN">✅ Win</option>
+          <option value="LOSS">❌ Loss</option>
+          <option value="BREAKEVEN">➖ Breakeven</option>
+          <option value="EXPIRED">⏰ Expired</option>
+        </select>
+        <input type="number" id="outcome-price" placeholder="Exit Price" step="0.01" style="width:100px">
+        <input type="number" id="outcome-pnl" placeholder="P&L ($)" step="0.01" style="width:90px">
+        <input type="number" id="outcome-pnl-pct" placeholder="P&L %" step="0.01" style="width:80px">
+        <input type="text" id="outcome-notes" placeholder="Notes..." style="width:140px">
+        <button onclick="submitOutcome('\${alert.id}')">Save</button>
+      </div>
+    </div>
+    \` : ''}
+
+    \${metadata && Object.keys(metadata).length > 0 ? \`
+    <div class="modal-section">
+      <div class="modal-section-title">🔍 Signal Metadata</div>
+      <div style="font-family:'Roboto Mono',monospace;font-size:10px;background:var(--c-surface);border-radius:var(--radius-s);padding:10px;max-height:160px;overflow-y:auto;color:var(--c-on-surface-2)">\${JSON.stringify(metadata, null, 2)}</div>
+    </div>
+    \` : ''}
+
+    <div class="modal-section">
+      <div class="modal-section-title">📨 Original Telegram Message</div>
+      <div class="modal-alert-text">\${(alert.alert_text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>
+    </div>
+  \`;
+}
+
+function closeAlertModal() {
+  $('alert-modal').classList.remove('active');
+}
+
+async function submitOutcome(id) {
+  const outcome = $('outcome-select').value;
+  const outcomePrice = parseFloat($('outcome-price').value) || null;
+  const outcomePnl = parseFloat($('outcome-pnl').value) || null;
+  const outcomePnlPct = parseFloat($('outcome-pnl-pct').value) || null;
+  const outcomeNotes = $('outcome-notes').value || null;
+
+  try {
+    const res = await fetch(BASE + '/api/telegram-alert-outcome', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({ id, outcome, outcomePrice, outcomePnl, outcomePnlPct, outcomeNotes })
+    });
+    if (res.ok) {
+      closeAlertModal();
+      loadDashboard();
+    } else {
+      alert('Failed to update: ' + (await res.text()));
+    }
+  } catch (err) {
+    alert('Error: ' + err.message);
+  }
+}
+
+// Close modal with Escape key
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAlertModal(); });
+
+// ═══════════════════════════════════════════════════════════
+// P&L ANALYTICS DASHBOARD
+// ═══════════════════════════════════════════════════════════
+
+function switchPnlTab(tabId, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  $('tab-' + tabId).classList.add('active');
+}
+
+function renderPnlDashboard(data) {
+  if (!data) {
+    $('pnl-cumulative').textContent = '—';
+    return;
+  }
+
+  const { dailyPnl, monthlyPnl, equityCurve, drawdownSeries, tradesByEngine, tradesBySymbol, streaks } = data;
+
+  // ── Hero Metrics ──
+  const cumulativePnl = dailyPnl.reduce((s, d) => s + d.daily_pnl, 0);
+  $('pnl-cumulative').textContent = fmtUsd(cumulativePnl);
+  $('pnl-cumulative').className = 'card-value ' + pnlClass(cumulativePnl);
+
+  // Best month
+  if (monthlyPnl.length > 0) {
+    const best = [...monthlyPnl].sort((a, b) => b.pnl - a.pnl)[0];
+    $('pnl-best-month').textContent = fmtUsd(best.pnl);
+    $('pnl-best-month-label').textContent = best.month;
+  }
+
+  // Max drawdown
+  if (drawdownSeries.length > 0) {
+    const maxDd = Math.min(...drawdownSeries.map(d => d.drawdown_pct));
+    $('pnl-max-dd').textContent = fmt(maxDd, 2) + '%';
+  }
+
+  // Streaks
+  if (streaks) {
+    const s = streaks;
+    if (s.currentStreak > 0 && s.currentType !== 'NONE') {
+      $('pnl-streak').textContent = s.currentStreak + ' ' + s.currentType;
+      $('pnl-streak').className = 'card-value ' + (s.currentType === 'WIN' ? 'up' : 'down');
+    } else {
+      $('pnl-streak').textContent = '—';
+    }
+    $('pnl-streak-sub').textContent = 'Best: ' + s.longestWin + 'W / Worst: ' + s.longestLoss + 'L';
+  }
+
+  // ── Equity Curve (Canvas) ──
+  renderLineChart('equity-canvas', equityCurve.map(d => d.date), equityCurve.map(d => d.equity), 'var(--c-primary)', true);
+
+  // ── Drawdown Chart (Canvas) ──
+  renderLineChart('drawdown-canvas', drawdownSeries.map(d => d.date), drawdownSeries.map(d => d.drawdown_pct), 'var(--c-sell)', false);
+
+  // ── Monthly Returns Heatmap ──
+  const grid = $('pnl-monthly-grid');
+  if (monthlyPnl.length > 0) {
+    grid.innerHTML = monthlyPnl.map(m => {
+      const intensity = Math.min(Math.abs(m.pnl_pct) / 10, 1);
+      const bg = m.pnl >= 0
+        ? \`rgba(63,185,80,\${0.1 + intensity * 0.4})\`
+        : \`rgba(248,81,73,\${0.1 + intensity * 0.4})\`;
+      const color = m.pnl >= 0 ? 'var(--c-buy)' : 'var(--c-sell)';
+      return \`<div class="pnl-month-cell" style="background:\${bg};color:\${color}" title="\${m.month}: \${fmtUsd(m.pnl)} (\${fmtPct(m.pnl_pct)}) - \${m.trades} trades, \${fmt(m.win_rate*100,0)}% WR">
+        <span class="month-label">\${m.month}</span>
+        \${fmtPct(m.pnl_pct)}
+      </div>\`;
+    }).join('');
+  } else {
+    grid.innerHTML = '<div class="empty" style="grid-column:span 6">No monthly data yet</div>';
+  }
+
+  // ── Daily P&L Bars ──
+  const bars = $('pnl-daily-bars');
+  const recent60 = dailyPnl.slice(-60);
+  if (recent60.length > 0) {
+    const maxAbs = Math.max(...recent60.map(d => Math.abs(d.daily_pnl)), 1);
+    const barH = 100;
+    bars.innerHTML = recent60.map(d => {
+      const v = d.daily_pnl;
+      const h = Math.max(2, Math.abs(v) / maxAbs * barH);
+      const color = v >= 0 ? 'var(--c-buy)' : 'var(--c-sell)';
+      return \`<div class="pnl-bar" style="height:\${h}px;background:\${color}" title="\${d.date}: \${fmtUsd(v)} (\${fmtPct(d.daily_pnl_pct)})">
+        <span class="bar-tip">\${d.date.slice(5)}: \${fmtUsd(v)}</span>
+      </div>\`;
+    }).join('');
+  } else {
+    bars.innerHTML = '<div class="empty" style="width:100%">No daily P&L data yet</div>';
+  }
+
+  // ── Breakdown Tables ──
+  renderBreakdownTable('pnl-engine-body', tradesByEngine, 'engine_id');
+  renderBreakdownTable('pnl-symbol-body', tradesBySymbol, 'symbol');
+}
+
+function renderBreakdownTable(bodyId, data, nameKey) {
+  const body = $(bodyId);
+  if (!data || !data.length) {
+    body.innerHTML = '<tr><td colspan="4" class="empty">No data yet</td></tr>';
+    return;
+  }
+  body.innerHTML = data.map(row => {
+    const pnl = row.pnl || 0;
+    const wr = row.win_rate != null ? fmt(row.win_rate * 100, 0) + '%' : '—';
+    return \`<tr>
+      <td class="mono" style="font-weight:500;font-size:11px">\${row[nameKey]}</td>
+      <td class="mono">\${row.count}</td>
+      <td class="mono" style="color:\${(row.win_rate||0) > 0.5 ? 'var(--c-buy)' : 'var(--c-sell)'}">\${wr}</td>
+      <td class="mono" style="color:\${pnl >= 0 ? 'var(--c-buy)' : 'var(--c-sell)'}">\${fmtUsd(pnl)}</td>
+    </tr>\`;
+  }).join('');
+}
+
+// ── Canvas Line Chart (lightweight, no external libs) ──
+function renderLineChart(canvasId, labels, values, color, fillBelow) {
+  const canvas = $(canvasId);
+  if (!canvas || !values.length) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.parentElement.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width;
+  const H = rect.height;
+  const pad = { top: 10, right: 10, bottom: 24, left: 60 };
+  const cW = W - pad.left - pad.right;
+  const cH = H - pad.top - pad.bottom;
+
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+  const range = maxV - minV || 1;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,.06)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (cH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const val = maxV - (range / 4) * i;
+    ctx.fillStyle = 'rgba(255,255,255,.3)';
+    ctx.font = '9px Roboto Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(val >= 1000 ? (val/1000).toFixed(1) + 'k' : val.toFixed(val < 10 ? 2 : 0), pad.left - 6, y + 3);
+  }
+
+  // X-axis labels (every nth)
+  const step = Math.max(1, Math.floor(labels.length / 8));
+  ctx.fillStyle = 'rgba(255,255,255,.3)';
+  ctx.font = '8px Roboto Mono, monospace';
+  ctx.textAlign = 'center';
+  for (let i = 0; i < labels.length; i += step) {
+    const x = pad.left + (i / (labels.length - 1)) * cW;
+    ctx.fillText(labels[i].slice(5), x, H - 4);
+  }
+
+  // Line path
+  ctx.beginPath();
+  const resolvedColor = (color.startsWith('var(')
+    ? getComputedStyle(document.documentElement).getPropertyValue(color.slice(4, -1).trim()).trim()
+    : color) || '#80CBC4';
+  for (let i = 0; i < values.length; i++) {
+    const x = pad.left + (i / (values.length - 1)) * cW;
+    const y = pad.top + cH - ((values[i] - minV) / range) * cH;
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = resolvedColor;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Fill below
+  if (fillBelow && values.length > 1) {
+    const lastX = pad.left + cW;
+    ctx.lineTo(lastX, pad.top + cH);
+    ctx.lineTo(pad.left, pad.top + cH);
+    ctx.closePath();
+    const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + cH);
+    gradient.addColorStop(0, resolvedColor + '33');
+    gradient.addColorStop(1, resolvedColor + '05');
+    ctx.fillStyle = gradient;
+    ctx.fill();
   }
 }
 

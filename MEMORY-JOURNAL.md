@@ -18,7 +18,7 @@
 | **Framework** | Hono v4.7 (HTTP router on Workers) |
 | **Mode** | **AUTONOMOUS PAPER TRADING** — 6-engine pipeline, Alpaca paper mode, with Telegram alerts |
 | **AI Engine** | Z.AI — Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct`) |
-| **Database** | D1 (`ymsa-db`) — 10 tables for trades, signals, positions, P&L, regime, risk events |
+| **Database** | D1 (`ymsa-db`) — 11 tables for trades, signals, positions, P&L, regime, risk events, telegram alerts |
 | **Output** | Telegram bot alerts → Yotam's phone → Manual override if needed |
 | **Local OS** | Windows 11 |
 | **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
@@ -491,7 +491,7 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 ### Active Bindings
 | Type | Name | Details |
 |---|---|---|
-| **D1 Database** | `DB` → `ymsa-db` | ID: `fbc9947c-7654-43d2-9cc9-e949baa60d05` — 10 tables |
+| **D1 Database** | `DB` → `ymsa-db` | ID: `fbc9947c-7654-43d2-9cc9-e949baa60d05` — 11 tables |
 | **KV Namespace** | `YMSA_CACHE` | ID: `a110e14c46e440dcad5a9f46a32e85b9` — API response caching |
 | **Workers AI** | `AI` | `@cf/meta/llama-3.1-8b-instruct` — Z.AI engine |
 | **Browser** | `BROWSER` | Playwright for Finviz/Google scraping |
@@ -772,12 +772,13 @@ The evening summary only shows updates for:
 | 2026-03-29 | `b93014f` | Configure Google OAuth Client ID for authentication |
 | 2026-03-30 | `8df582f` | **Z.AI full integration**: wire reviewTrade, composeAlert, real weekly P&L, 30 tests |
 | 2026-04-01 | `bca9e2e` | **Trade alert overhaul**: SMA 50/200, 24hr dedup, remove commodity Big Moves, filtered evening summary with holdings report |
+| 2026-04-01 | *pending* | **v3.1: Win/Loss Tracker + P&L Dashboard** — telegram_alerts table, 5 new API endpoints, alert outcome tracking, equity curve, drawdown, monthly returns, daily P&L, engine/symbol breakdown |
 
 ---
 
 ## 💾 D1 Database Schema (`src/db/schema.sql`)
 
-10 tables with full audit trail:
+11 tables with full audit trail:
 
 | Table | Key Columns | Purpose |
 |---|---|---|
@@ -791,14 +792,16 @@ The evening summary only shows updates for:
 | `news_alerts` | id, category, title, url, published_at, processed, created_at | Google Alerts ingestion |
 | `risk_events` | id, event_type, severity, description, action_taken, created_at | Risk event audit |
 | `kill_switch_state` | id=singleton, tier, activated_at, daily_pnl_pct, reason | Kill switch persistence |
+| `telegram_alerts` | id, symbol, action, engine_id, entry_price, stop_loss, take_profit_1/2, confidence, alert_text, outcome (PENDING/WIN/LOSS/BREAKEVEN/EXPIRED), outcome_price, outcome_pnl, outcome_pnl_pct, outcome_notes, outcome_at, regime, metadata, sent_at | Track every Telegram alert for win/loss analysis |
 
-### Key Queries (`src/db/queries.ts` — 20+ exported functions)
+### Key Queries (`src/db/queries.ts` — 29+ exported functions)
 - **Trades**: `insertTrade`, `closeTrade`, `getOpenTrades`, `getTradesByEngine`, `getRecentTrades`, `getClosedTradesSince`
 - **Positions**: `upsertPosition`, `deletePosition`, `getOpenPositions`, `getPositionBySymbol`
 - **Signals**: `insertSignal`, `getRecentSignals`, `getSignalsByEngine`
 - **P&L**: `upsertDailyPnl`, `getDailyPnlRange`, `getRecentDailyPnl`
 - **Engine**: `upsertEnginePerformance`, `getEnginePerformance`
 - **Utility**: `generateId(prefix)`, `insertRiskEvent`, `getRecentRiskEvents`, `getRecentNewsAlerts`, `getNewsAlertsByCategory`
+- **Telegram Alerts**: `insertTelegramAlert`, `updateTelegramAlertOutcome`, `getRecentTelegramAlerts`, `getTelegramAlertById`, `getTelegramAlertStats`, `getPnlDashboardData`, `getPendingTelegramAlerts`, `expireOldTelegramAlerts`
 
 ---
 
@@ -912,7 +915,7 @@ node .\node_modules\vitest\vitest.mjs run
 
 ### Completed (formerly planned)
 - ✅ KV Namespace caching for API responses (YMSA_CACHE active)
-- ✅ D1 Database for trade history and performance tracking (10 tables)
+- ✅ D1 Database for trade history and performance tracking (11 tables)
 - ✅ Previous indicator storage (cycleIndicators in broker-manager)
 - ✅ Z.AI LLM integration for signal reasoning
 
@@ -927,6 +930,14 @@ node .\node_modules\vitest\vitest.mjs run
 - [ ] Live (non-paper) Alpaca execution mode
 - [ ] Options pricing engine (Black-Scholes, Greeks)
 - [ ] Portfolio heat map visualization
+
+### Recently Completed
+- ✅ **Win/Loss Alert Tracker** — Every Telegram alert logged to D1 `telegram_alerts` table with full trade setup. Dashboard table with filters (ALL/PENDING/WIN/LOSS/BREAKEVEN/EXPIRED), click-to-open modal with trade details, manual outcome marking.
+- ✅ **P&L Analytics Dashboard** — Equity curve, drawdown chart, monthly returns heatmap, daily P&L bars, engine/symbol breakdown tables. Hero metrics (total P&L, win rate, profit factor, max drawdown). Canvas-based charts, Material Design 3 dark theme.
+- ✅ **Alert logging pipeline** — Both `alert-router.ts` (direct sends) and `broker-manager.ts` (cycle flush) log to D1.
+- ✅ **Auto-resolution cron** — `runOvernightSetup` checks PENDING alerts against market prices (SL→LOSS, TP1→WIN, stagnant→BREAKEVEN). Alerts older than 7 days auto-expire.
+- ✅ Batch `/api/dashboard-data` endpoint (reduces 3 API calls to 1). Dashboard now makes 12 parallel calls instead of 14.
+- ✅ 6 new API endpoints: `/api/telegram-alerts`, `/api/telegram-alert`, `/api/telegram-alert-stats`, `/api/telegram-alert-outcome`, `/api/pnl-dashboard`, `/api/dashboard-data`
 
 ---
 

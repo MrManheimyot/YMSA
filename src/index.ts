@@ -19,7 +19,7 @@ import { analyzeSmartMoney } from './analysis/smart-money';
 import { formatSmartMoneyTradeAlert, setCurrentRegime } from './alert-formatter';
 import { renderDashboard, getSystemStatus } from './dashboard';
 import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
-import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentDailyPnl, getAllLatestEnginePerformance } from './db/queries';
+import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentDailyPnl, getAllLatestEnginePerformance, getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, updateTelegramAlertOutcome, getPnlDashboardData } from './db/queries';
 import { fetchGoogleAlerts, storeNewsAlerts, getFeedConfig } from './api/google-alerts';
 import { isAuthenticated, handleGoogleAuth, handleLogout, handleAuthMe } from './auth';
 import { ensureEnv } from './utils/env-validator';
@@ -394,6 +394,68 @@ export default {
         return jsonResponse({ alerts: liveNews.slice(0, limit), count: liveNews.length, live: true });
       }
 
+      // ═══════════════════════════════════════════════════
+      // v3.1: TELEGRAM ALERT LOG + P&L DASHBOARD ROUTES
+      // ═══════════════════════════════════════════════════
+
+      // ─── Telegram Alert Log ────────────────────────
+      if (path === '/api/telegram-alerts') {
+        const limit = parseInt(url.searchParams.get('limit') || '50', 10);
+        const alerts = await getRecentTelegramAlerts(env.DB!, limit);
+        return jsonResponse({ alerts, count: alerts.length }, 200, corsHeaders);
+      }
+
+      // ─── Telegram Alert Detail ─────────────────────
+      if (path === '/api/telegram-alert') {
+        const id = url.searchParams.get('id');
+        if (!id) return jsonResponse({ error: 'Missing ?id= parameter' }, 400, corsHeaders);
+        const alert = await getTelegramAlertById(env.DB!, id);
+        if (!alert) return jsonResponse({ error: 'Alert not found' }, 404, corsHeaders);
+        return jsonResponse(alert, 200, corsHeaders);
+      }
+
+      // ─── Telegram Alert Stats ──────────────────────
+      if (path === '/api/telegram-alert-stats') {
+        const stats = await getTelegramAlertStats(env.DB!);
+        return jsonResponse(stats, 200, corsHeaders);
+      }
+
+      // ─── Update Telegram Alert Outcome ─────────────
+      if (path === '/api/telegram-alert-outcome' && request.method === 'POST') {
+        let body: { id: string; outcome: string; outcomePrice?: number; outcomePnl?: number; outcomePnlPct?: number; outcomeNotes?: string };
+        try {
+          body = await request.json();
+        } catch {
+          return jsonResponse({ error: 'Invalid JSON body' }, 400, corsHeaders);
+        }
+        if (!body.id || !body.outcome) return jsonResponse({ error: 'Missing id or outcome' }, 400, corsHeaders);
+        const validOutcomes = ['WIN', 'LOSS', 'BREAKEVEN', 'EXPIRED'];
+        if (!validOutcomes.includes(body.outcome)) return jsonResponse({ error: 'Invalid outcome. Must be WIN, LOSS, BREAKEVEN, or EXPIRED' }, 400, corsHeaders);
+        await updateTelegramAlertOutcome(
+          env.DB!, body.id,
+          body.outcome as 'WIN' | 'LOSS' | 'BREAKEVEN' | 'EXPIRED',
+          body.outcomePrice ?? null, body.outcomePnl ?? null,
+          body.outcomePnlPct ?? null, body.outcomeNotes ?? null
+        );
+        return jsonResponse({ ok: true, id: body.id, outcome: body.outcome }, 200, corsHeaders);
+      }
+
+      // ─── P&L Dashboard Data ────────────────────────
+      if (path === '/api/pnl-dashboard') {
+        const data = await getPnlDashboardData(env.DB!);
+        return jsonResponse(data, 200, corsHeaders);
+      }
+
+      // ─── Batch Dashboard Data (reduces API calls) ──
+      if (path === '/api/dashboard-data') {
+        const [tgAlerts, tgStats, pnlDash] = await Promise.all([
+          getRecentTelegramAlerts(env.DB!, 100),
+          getTelegramAlertStats(env.DB!),
+          getPnlDashboardData(env.DB!),
+        ]);
+        return jsonResponse({ tgAlerts, tgStats, pnlDash }, 200, corsHeaders);
+      }
+
       // ─── 404 ───────────────────────────────────────
       return jsonResponse({
         error: 'Not found',
@@ -422,6 +484,12 @@ export default {
           'GET /api/engine-stats',
           'GET /api/news?category=&limit=30&fresh=true',
           'GET /api/test-alert',
+          'GET /api/telegram-alerts?limit=50',
+          'GET /api/telegram-alert?id=',
+          'GET /api/telegram-alert-stats',
+          'POST /api/telegram-alert-outcome',
+          'GET /api/pnl-dashboard',
+          'GET /api/dashboard-data',
           'GET /api/trigger?job=morning|open|opening_range|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
         ],
       }, 404);

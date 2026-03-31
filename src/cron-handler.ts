@@ -23,7 +23,7 @@ import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from './api/goog
 import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEnginePerformance, getPerformanceMetrics, formatPerformanceReport } from './execution/portfolio';
 import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
 import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
-import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades } from './db/queries';
+import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades, getPendingTelegramAlerts, updateTelegramAlertOutcome, expireOldTelegramAlerts } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, sendRiskAlert, sendExecutionAlert } from './broker-manager';
 import { scoreNewsSentiment, weeklyNarrative, isZAiAvailable } from './ai/z-engine';
@@ -1076,6 +1076,62 @@ async function runMiddayRebalance(env: Env): Promise<void> {
 async function runOvernightSetup(env: Env): Promise<void> {
   // Record daily P&L
   await recordDailyPnl(env);
+
+  // ── Auto-resolve PENDING Telegram alerts ──
+  if (env.DB) {
+    try {
+      // 1. Expire alerts older than 7 days
+      const expired = await expireOldTelegramAlerts(env.DB, 7 * 24 * 60 * 60 * 1000);
+      if (expired > 0) console.log(`[Overnight] Auto-expired ${expired} old alerts`);
+
+      // 2. Check pending alerts against current market prices
+      const pending = await getPendingTelegramAlerts(env.DB);
+      if (pending.length > 0) {
+        const symbols = [...new Set(pending.map(a => a.symbol))];
+        const quotes = await yahooFinance.getMultipleQuotes(symbols);
+        const priceMap = new Map(quotes.map(q => [q.symbol, q.price]));
+
+        let resolved = 0;
+        for (const alert of pending) {
+          const currentPrice = priceMap.get(alert.symbol);
+          if (!currentPrice) continue;
+
+          const entry = alert.entry_price;
+          const sl = alert.stop_loss;
+          const tp1 = alert.take_profit_1;
+          const isBuy = alert.action === 'BUY';
+
+          // Check stop loss hit
+          if (sl && ((isBuy && currentPrice <= sl) || (!isBuy && currentPrice >= sl))) {
+            const pnl = isBuy ? (currentPrice - entry) : (entry - currentPrice);
+            const pnlPct = (pnl / entry) * 100;
+            await updateTelegramAlertOutcome(env.DB, alert.id, 'LOSS', currentPrice, pnl, pnlPct, 'Auto-resolved: stop loss hit');
+            resolved++;
+            continue;
+          }
+
+          // Check TP1 hit (conservative — resolve at TP1)
+          if (tp1 && ((isBuy && currentPrice >= tp1) || (!isBuy && currentPrice <= tp1))) {
+            const pnl = isBuy ? (currentPrice - entry) : (entry - currentPrice);
+            const pnlPct = (pnl / entry) * 100;
+            await updateTelegramAlertOutcome(env.DB, alert.id, 'WIN', currentPrice, pnl, pnlPct, 'Auto-resolved: TP1 reached');
+            resolved++;
+            continue;
+          }
+
+          // Breakeven: price moved past entry but came back within 0.5%
+          const moveFromEntry = isBuy ? (currentPrice - entry) / entry : (entry - currentPrice) / entry;
+          if (Math.abs(moveFromEntry) < 0.005 && (Date.now() - alert.sent_at) > 3 * 24 * 60 * 60 * 1000) {
+            await updateTelegramAlertOutcome(env.DB, alert.id, 'BREAKEVEN', currentPrice, 0, 0, 'Auto-resolved: price stagnant after 3 days');
+            resolved++;
+          }
+        }
+        if (resolved > 0) console.log(`[Overnight] Auto-resolved ${resolved} alerts`);
+      }
+    } catch (err) {
+      console.error('[Overnight] Alert resolution error:', err);
+    }
+  }
 
   // Full news digest
   try {
