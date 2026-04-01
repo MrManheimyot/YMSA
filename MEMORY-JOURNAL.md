@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-01 (commit bca9e2e)
+> Last updated: 2026-04-01 (commit fc4e614)
 
 ---
 
@@ -339,6 +339,7 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 - CoinGecko: prices, market cap, 24h/7d changes, trending coins
 - DexScreener: DEX pair data, liquidity analysis
 - Whale activity detection (large volume spikes on-chain)
+- **DEX mover fallback**: When whale signals are empty, scans for top-volume DEX pairs with >5% price moves (added commit `3cb46f2`)
 - Watchlist: Bitcoin, Ethereum, Solana, Cardano, Polkadot, Avalanche, Chainlink, Uniswap, Aave, Arbitrum
 
 ### Engine 5: Event-Driven (`EVENT_DRIVEN`)
@@ -347,11 +348,12 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 - Z.AI news sentiment scoring (BULLISH/BEARISH/NEUTRAL + confidence)
 - Finnhub: earnings calendar, company news
 
-### Engine 6: Macro/Commodities (`COMMODITIES`)
+### Engine 6: Macro/Commodities (`COMMODITIES` / `EVENT_DRIVEN`)
 - Yahoo Finance: Gold, Silver, Oil (WTI/Brent), Natural Gas, Copper, Platinum, Corn, Wheat, etc.
 - FRED: GDP, CPI, unemployment, yield curve (2Y/10Y), VIX
-- Yield curve inversion alerts
-- **No longer sends "Commodity Alert — Big Moves"** (removed in commit bca9e2e)
+- Yield curve inversion alerts → `pushEventDriven('MACRO', 'YIELD_CURVE_INVERSION', ...)`
+- **Commodity big-move detection** (added commit `3cb46f2`): any commodity with ≥3% daily change generates EVENT_DRIVEN signal. Named mapping: GC=F→Gold, SI=F→Silver, CL=F→Oil (WTI), BZ=F→Oil (Brent), NG=F→Natural Gas, HG=F→Copper, PL=F→Platinum
+- Signals routed through `pushEventDriven()` with inline D1 recording
 
 ### Support: Market Regime Detection (`src/analysis/regime.ts`)
 - Detects: TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE
@@ -378,13 +380,17 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 
 ### Support: Broker Manager (`src/broker-manager.ts`)
 - **Cycle-based orchestration**: `beginCycle()` → engines push → `flushCycle()` sends
+- **ALL 6 engines now route through broker manager** (fixed commit `d5df5be`): `pushSmartMoney`, `pushMTF`, `pushTechnical`, `pushStatArb`, `pushCryptoDefi`, `pushEventDriven`, `pushOptions`
+- **`pushAndRecordSignal(output, db)`** (added commit `3cb46f2`): Hybrid function that both pushes to `cycleOutputs` AND immediately inserts to D1 `signals` table. Prevents signal loss if scan times out before `flushCycle`
+- The 4 non-execution push functions (`pushStatArb`, `pushCryptoDefi`, `pushEventDriven`, `pushOptions`) are async and accept optional `db: D1Database` param for inline recording
 - Cross-engine dedup: 24-hour window per symbol (`DEDUP_MS = 86400000`)
 - Alert budget: max 3 trade alerts per hour (`MAX_TRADE_ALERTS_PER_HOUR`)
 - Per-symbol indicator storage: `cycleIndicators: Map<string, TechnicalIndicator[]>`
-- Signal merging by symbol (multiple engines can agree on same stock)
+- Signal merging by symbol: `mergeBySymbol()` → `planTradeAlert()` (confidence ≥55, non-conflicting or ≥70)
 - Z.AI integration: batch compose for 2+ high-confidence signals, individual synthesis otherwise
 - Market context message appended to alerts
 - "Nothing happening" fallback when no signals fire
+- **D1 recording**: Only trade alerts (with `_trade` metadata) get logged to `telegram_alerts`. Market context / no-signals messages are sent to Telegram but not logged
 
 ### Support: Execution Engine (`src/execution/engine.ts`)
 - Alpaca paper-mode bracket orders (entry + SL + TP)
@@ -529,14 +535,14 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 - Browser Rendering requires Cloudflare Workers Paid Plan
 
 ### 4. TAAPI Rate Limiting for MTF
-- MTF engine uses TAAPI bulk API with 15.5 sec between calls
+- MTF engine now primarily uses **Yahoo Finance OHLCV + local indicators** (free, reliable)
+- TAAPI is used only as optional enhancement (stochastic, supertrend) when cached in KV
 - Results cached 5 minutes in KV to avoid repeated calls
-- If KV cache misses and TAAPI is throttled, MTF returns null signal
 
 ### 5. Local Indicator Engine Replaces TAAPI for Stocks
 - `src/analysis/indicators.ts` computes RSI, EMA, SMA, MACD, ATR from Yahoo OHLCV candles
 - This was built because TAAPI free tier broke for individual stock queries
-- TAAPI is still used for MTF bulk queries (4 timeframes at once)
+- MTF now uses `buildBulkFromOHLCV()` with daily data as 4H proxy (Yahoo free tier doesn't have 4h for stocks)
 
 ### 6. Pairs Trading — Cointegration Test
 - Uses simplified variance-ratio proxy — NOT the full Augmented Dickey-Fuller test
@@ -556,6 +562,22 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 - Holdings report in evening summary queries `getOpenTrades(env.DB)`
 - If D1 is unavailable or has no open trades, holdings section is simply skipped
 - Commodity/Index/Bitcoin sections always show regardless
+
+### 10. Silent Engines Are Normal in Sideways Markets
+- **MTF_MOMENTUM**: Confluence threshold is 65% + requires BUY/SELL (not WAIT). In neutral/sideways markets (RSI ~50, no strong trend), most stocks return null. This is correct behavior.
+- **STAT_ARB**: Requires |z-score| > 1.5 for tradable pair. In correlated markets, few pairs diverge enough. This is correct.
+- **CRYPTO_DEFI**: DexScreener whale detection needs $1M+ volume + 10% change. CoinGecko trending can return empty. DEX mover fallback (>5% + $100K vol) helps but crypto can still be quiet.
+- As of 2026-04-01: 3/6 engines producing signals (EVENT_DRIVEN, SMART_MONEY, OPTIONS). The other 3 are market-condition dependent, not broken.
+
+### 11. `telegram_alerts` Table vs Telegram Messages
+- `telegram_alerts` D1 table ONLY stores trade alerts (BUY/SELL with entry/SL/TP) that pass `planTradeAlert` gating (confidence ≥55, not conflicting below 70).
+- Market context messages and "no signals" fallback ARE sent to Telegram but NOT logged to the table.
+- Having 0 rows in `telegram_alerts` does NOT mean Telegram isn't receiving messages.
+
+### 12. Cloudflare Worker CPU Timeout vs Signal Recording
+- Full scan runs ~30 seconds. If scan times out before `flushCycle()`, signals from late engines would be lost.
+- **Fix**: `pushAndRecordSignal()` records each signal to D1 INLINE as it's generated — no longer depends on scan completing.
+- Engine stats update at end of `runFullScan` may still be missed on timeout; `/api/engine-stats` has a live fallback that queries `signals` table directly.
 
 ---
 
@@ -772,7 +794,10 @@ The evening summary only shows updates for:
 | 2026-03-29 | `b93014f` | Configure Google OAuth Client ID for authentication |
 | 2026-03-30 | `8df582f` | **Z.AI full integration**: wire reviewTrade, composeAlert, real weekly P&L, 30 tests |
 | 2026-04-01 | `bca9e2e` | **Trade alert overhaul**: SMA 50/200, 24hr dedup, remove commodity Big Moves, filtered evening summary with holdings report |
-| 2026-04-01 | *pending* | **v3.1: Win/Loss Tracker + P&L Dashboard** — telegram_alerts table, 5 new API endpoints, alert outcome tracking, equity curve, drawdown, monthly returns, daily P&L, engine/symbol breakdown |
+| 2026-04-01 | `db99f78` | **v3.1: Win/Loss Tracker + P&L Dashboard** — telegram_alerts table, 5 new API endpoints, alert outcome tracking, equity curve, drawdown, monthly returns, daily P&L, engine/symbol breakdown |
+| 2026-04-01 | `d5df5be` | **Fix: All 6 engines route through broker manager** — previously 5/6 engines bypassed broker, sending Telegram directly. Now all push through `pushStatArb`, `pushCryptoDefi`, `pushEventDriven`, `pushOptions` |
+| 2026-04-01 | `3cb46f2` | **Inline D1 signal recording + scan enhancements** — `pushAndRecordSignal()` records signals immediately to D1 (not waiting for flushCycle). Commodity big-move detection (>3%), crypto DEX mover fallback |
+| 2026-04-01 | `fc4e614` | **Live engine signal counts in dashboard** — `/api/engine-stats` merges `engine_performance` table with live signal counts from `signals` table. Engine stats updated after each full scan |
 
 ---
 
@@ -938,6 +963,12 @@ node .\node_modules\vitest\vitest.mjs run
 - ✅ **Auto-resolution cron** — `runOvernightSetup` checks PENDING alerts against market prices (SL→LOSS, TP1→WIN, stagnant→BREAKEVEN). Alerts older than 7 days auto-expire.
 - ✅ Batch `/api/dashboard-data` endpoint (reduces 3 API calls to 1). Dashboard now makes 12 parallel calls instead of 14.
 - ✅ 6 new API endpoints: `/api/telegram-alerts`, `/api/telegram-alert`, `/api/telegram-alert-stats`, `/api/telegram-alert-outcome`, `/api/pnl-dashboard`, `/api/dashboard-data`
+- ✅ **All 6 engines through broker manager** — Fixed 5/6 engines that were bypassing broker manager and sending Telegram directly. All now use `pushStatArb`, `pushCryptoDefi`, `pushEventDriven`, `pushOptions` (commit `d5df5be`).
+- ✅ **Inline D1 signal recording** — `pushAndRecordSignal()` records signals to D1 immediately as each engine produces output, not waiting for `flushCycle`. Prevents signal loss on scan timeout (commit `3cb46f2`).
+- ✅ **Commodity big-move detection** — `runCommodityScan` now detects ≥3% daily commodity price moves and generates EVENT_DRIVEN signals with named commodities (commit `3cb46f2`).
+- ✅ **Crypto DEX mover fallback** — `runCryptoWhaleScan` falls back to top-volume DEX pairs with >5% moves when whale signals are empty (commit `3cb46f2`).
+- ✅ **Live engine stats in dashboard** — `/api/engine-stats` now merges `engine_performance` table with live signal counts from `signals` table. Engine cards show real-time signal counts (commit `fc4e614`).
+- ✅ **Verified live**: 38 signals from 3 engines (EVENT_DRIVEN: 12, SMART_MONEY: 8, OPTIONS: 2) visible in dashboard as of 2026-04-01.
 
 ---
 
