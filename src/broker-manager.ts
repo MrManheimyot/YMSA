@@ -18,7 +18,7 @@ import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
 import { synthesizeSignal, composeAlert, isZAiAvailable } from './ai/z-engine';
 import type { MergedTradeInfo } from './ai/z-engine';
-import { insertTelegramAlert, generateId } from './db/queries';
+import { insertTelegramAlert, insertSignal, generateId } from './db/queries';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -121,6 +121,31 @@ export function addContext(line: string): void {
 
 export function pushEngineOutput(output: EngineOutput): void {
   cycleOutputs.push(output);
+}
+
+/**
+ * Push engine output AND immediately record to D1 signals table.
+ * Use for engines that don't call executeBatch (stat-arb, crypto, options, event-driven).
+ */
+export async function pushAndRecordSignal(output: EngineOutput, db: D1Database | null): Promise<void> {
+  cycleOutputs.push(output);
+  if (!db || output.direction === 'HOLD' || output.direction === 'NEUTRAL') return;
+  try {
+    const engineKey = output.engine.toUpperCase().replace(/\s+/g, '_');
+    await insertSignal(db, {
+      id: generateId('sig'),
+      engine_id: engineKey,
+      signal_type: output.reason.split(':')[0].trim().substring(0, 50),
+      symbol: output.symbol,
+      direction: output.direction as 'BUY' | 'SELL',
+      strength: output.confidence,
+      metadata: JSON.stringify({ reason: output.reason, signals: output.signals }),
+      created_at: Date.now(),
+      acted_on: 0,
+    });
+  } catch (err) {
+    console.error(`[Broker] Inline signal insert failed for ${output.symbol}:`, err);
+  }
 }
 
 /**
@@ -259,10 +284,11 @@ export function pushTechnical(
 /**
  * Push a pairs/stat-arb signal through broker manager
  */
-export function pushStatArb(
+export async function pushStatArb(
   pair: { symbolA: string; symbolB: string; zScore: number; direction: string; halfLife: number; correlation: number },
   quotes: { a: StockQuote; b: StockQuote },
-): void {
+  db?: D1Database | null,
+): Promise<void> {
   const dir: 'BUY' | 'SELL' = pair.direction === 'LONG_A_SHORT_B' ? 'BUY' : 'SELL';
   const zsAbs = Math.abs(pair.zScore);
   const conf = Math.min(95, 50 + zsAbs * 15 + (pair.correlation > 0.8 ? 10 : 0));
@@ -271,7 +297,7 @@ export function pushStatArb(
   const entryA = quotes.a.price;
   const atr = entryA * 0.02;
 
-  pushEngineOutput({
+  await pushAndRecordSignal({
     engine: 'Stat Arb',
     symbol: pair.symbolA,
     direction: dir,
@@ -287,20 +313,21 @@ export function pushStatArb(
       `Half-Life: ${pair.halfLife.toFixed(0)} days`,
       `Correlation: ${pair.correlation.toFixed(2)}`,
     ],
-  });
+  }, db || null);
 }
 
 /**
  * Push crypto/DeFi whale signal through broker manager
  */
-export function pushCryptoDefi(
+export async function pushCryptoDefi(
   signal: { symbol: string; type: string; volume: number; priceChange: number; liquidity: number },
   confidence: number,
-): void {
+  db?: D1Database | null,
+): Promise<void> {
   if (confidence < 50) return;
   const dir: 'BUY' | 'SELL' = signal.priceChange >= 0 ? 'BUY' : 'SELL';
 
-  pushEngineOutput({
+  await pushAndRecordSignal({
     engine: 'Crypto DeFi',
     symbol: signal.symbol,
     direction: dir,
@@ -312,13 +339,13 @@ export function pushCryptoDefi(
       `Price Change: ${signal.priceChange >= 0 ? '+' : ''}${signal.priceChange.toFixed(1)}%`,
       `Liquidity: $${(signal.liquidity / 1e6).toFixed(1)}M`,
     ],
-  });
+  }, db || null);
 }
 
 /**
  * Push event-driven signal (news/earnings) through broker manager
  */
-export function pushEventDriven(
+export async function pushEventDriven(
   symbol: string,
   _eventType: string,
   direction: 'BUY' | 'SELL',
@@ -326,11 +353,12 @@ export function pushEventDriven(
   reason: string,
   signals: string[],
   quote?: StockQuote,
-): void {
+  db?: D1Database | null,
+): Promise<void> {
   if (confidence < 50) return;
   const atr = quote ? quote.price * 0.02 : 0;
 
-  pushEngineOutput({
+  await pushAndRecordSignal({
     engine: 'Event Driven',
     symbol,
     direction,
@@ -340,24 +368,25 @@ export function pushEventDriven(
     tp1: quote ? (direction === 'BUY' ? quote.price + atr * 2 : quote.price - atr * 2) : undefined,
     reason,
     signals,
-  });
+  }, db || null);
 }
 
 /**
  * Push options-style signal (high IV / squeeze) through broker manager
  */
-export function pushOptions(
+export async function pushOptions(
   symbol: string,
   signalType: string,
   direction: 'BUY' | 'SELL',
   confidence: number,
   quote: StockQuote,
   indicators: TechnicalIndicator[],
-): void {
+  db?: D1Database | null,
+): Promise<void> {
   if (confidence < 50) return;
   const atr = indicators.find(i => i.indicator === 'ATR')?.value ?? quote.price * 0.02;
 
-  pushEngineOutput({
+  await pushAndRecordSignal({
     engine: 'Options',
     symbol,
     direction,
@@ -371,7 +400,7 @@ export function pushOptions(
       `Signal: ${signalType}`,
       ...indicators.filter(i => ['RSI', 'ATR', 'BB_WIDTH'].includes(i.indicator)).map(i => `${i.indicator}: ${i.value.toFixed(2)}`),
     ].slice(0, 4),
-  });
+  }, db || null);
 }
 
 // ═══════════════════════════════════════════════════════════════

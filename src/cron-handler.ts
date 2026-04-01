@@ -373,7 +373,7 @@ async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
   }
 }
 
-async function runCryptoWhaleScan(_env: Env): Promise<void> {
+async function runCryptoWhaleScan(env: Env): Promise<void> {
   try {
     // Check top pairs for whale activity
     const ethPairs = await dexscreener.searchPairs('WETH');
@@ -384,13 +384,28 @@ async function runCryptoWhaleScan(_env: Env): Promise<void> {
 
     if (whaleSignals.length > 0) {
       for (const signal of whaleSignals.slice(0, 5)) {
-        pushCryptoDefi({
+        await pushCryptoDefi({
           symbol: signal.pair,
           type: signal.type,
           volume: signal.volume24h,
           priceChange: signal.priceChange24h,
           liquidity: signal.liquidity,
-        }, Math.min(90, 50 + (signal.volume24h / 1e6) * 5));
+        }, Math.min(90, 50 + (signal.volume24h / 1e6) * 5), env.DB);
+      }
+    } else {
+      // Fallback: top-volume DEX pairs with significant moves (> 5%)
+      const movers = allPairs
+        .filter(p => p.volume24h > 100_000 && Math.abs(p.priceChange24h) > 5)
+        .sort((a, b) => b.volume24h - a.volume24h)
+        .slice(0, 3);
+      for (const p of movers) {
+        await pushCryptoDefi({
+          symbol: `${p.baseTokenSymbol}/${p.quoteTokenSymbol}`,
+          type: p.priceChange24h > 0 ? 'DEX_MOVER_UP' : 'DEX_MOVER_DOWN',
+          volume: p.volume24h,
+          priceChange: p.priceChange24h,
+          liquidity: p.liquidity,
+        }, Math.min(80, 50 + Math.abs(p.priceChange24h) * 1.5), env.DB);
       }
     }
 
@@ -398,13 +413,13 @@ async function runCryptoWhaleScan(_env: Env): Promise<void> {
     const trending = await coingecko.getTrendingCoins();
     if (trending.length > 0) {
       for (const coin of trending.slice(0, 3)) {
-        pushCryptoDefi({
+        await pushCryptoDefi({
           symbol: coin.symbol.toUpperCase(),
           type: 'TRENDING',
           volume: 0,
           priceChange: 0,
           liquidity: 0,
-        }, 55);
+        }, 55, env.DB);
       }
     }
   } catch (err) {
@@ -412,7 +427,7 @@ async function runCryptoWhaleScan(_env: Env): Promise<void> {
   }
 }
 
-async function runPolymarketScan(_env: Env): Promise<void> {
+async function runPolymarketScan(env: Env): Promise<void> {
   try {
     const markets = await polymarket.getActiveMarkets(20);
     const valueBets = polymarket.findValueBets(markets, 10000, [0.15, 0.85]);
@@ -422,13 +437,15 @@ async function runPolymarketScan(_env: Env): Promise<void> {
         const topOutcome = market.outcomes[0];
         const direction: 'BUY' | 'SELL' = topOutcome && topOutcome.price > 0.5 ? 'BUY' : 'SELL';
         const conf = Math.min(85, 50 + (market.volume / 100000) * 5);
-        pushEventDriven(
+        await pushEventDriven(
           market.id || 'POLYMARKET',
           'VALUE_BET',
           direction,
           conf,
           `Polymarket value bet: ${market.question.slice(0, 60)} | Vol: $${(market.volume / 1000).toFixed(0)}K`,
           [`Outcome: ${topOutcome?.name || '?'} (${((topOutcome?.price || 0) * 100).toFixed(0)}%)`, `Volume: $${(market.volume / 1000).toFixed(0)}K`],
+          undefined,
+          env.DB,
         );
       }
     }
@@ -439,7 +456,7 @@ async function runPolymarketScan(_env: Env): Promise<void> {
 
 async function runCommodityScan(env: Env): Promise<void> {
   try {
-    const [, yieldCurve] = await Promise.all([
+    const [commodities, yieldCurve] = await Promise.all([
       yahooFinance.getCommodityPrices(),
       fred.checkYieldCurve(env.FRED_API_KEY),
       fred.getCommodityPrices(env.FRED_API_KEY),
@@ -447,14 +464,41 @@ async function runCommodityScan(env: Env): Promise<void> {
 
     // Yield curve alert — route through broker as event-driven
     if (yieldCurve && yieldCurve.inverted) {
-      pushEventDriven(
+      await pushEventDriven(
         'MACRO',
         'YIELD_CURVE_INVERSION',
         'SELL',
         75,
         `Yield curve inverted: spread ${yieldCurve.spread.toFixed(2)}%. ${yieldCurve.signal}`,
         [`Spread: ${yieldCurve.spread.toFixed(2)}%`, yieldCurve.signal],
+        undefined,
+        env.DB,
       );
+    }
+
+    // Big commodity price moves (> 3% daily change)
+    if (commodities && commodities.length > 0) {
+      for (const c of commodities) {
+        if (Math.abs(c.changePercent) >= 3) {
+          const direction: 'BUY' | 'SELL' = c.changePercent > 0 ? 'BUY' : 'SELL';
+          const conf = Math.min(85, 55 + Math.abs(c.changePercent) * 3);
+          const name = c.symbol === 'GC=F' ? 'Gold' : c.symbol === 'SI=F' ? 'Silver' : c.symbol === 'CL=F' ? 'Oil (WTI)' : c.symbol === 'BZ=F' ? 'Oil (Brent)' : c.symbol === 'NG=F' ? 'Natural Gas' : c.symbol === 'HG=F' ? 'Copper' : c.symbol === 'PL=F' ? 'Platinum' : c.symbol;
+          await pushEventDriven(
+            c.symbol,
+            'COMMODITY_MOVE',
+            direction,
+            conf,
+            `${name} ${direction === 'BUY' ? 'surging' : 'plunging'} ${c.changePercent > 0 ? '+' : ''}${c.changePercent.toFixed(1)}% — $${c.price.toFixed(2)}`,
+            [
+              `Price: $${c.price.toFixed(2)}`,
+              `Change: ${c.changePercent > 0 ? '+' : ''}${c.changePercent.toFixed(1)}%`,
+              `Volume: ${c.volume.toLocaleString()}`,
+            ],
+            undefined,
+            env.DB,
+          );
+        }
+      }
     }
   } catch (err) {
     console.error('[Agent5] Commodity scan error:', err);
@@ -769,9 +813,10 @@ async function runPairsScan(env: Env): Promise<void> {
         const quoteB = await yahooFinance.getQuote(pair.symbolB);
         if (quoteA && quoteB) {
           const direction = pair.currentZScore > 0 ? 'LONG_B_SHORT_A' : 'LONG_A_SHORT_B';
-          pushStatArb(
+          await pushStatArb(
             { symbolA: pair.symbolA, symbolB: pair.symbolB, zScore: pair.currentZScore, direction, halfLife: pair.halfLife, correlation: pair.correlation },
             { a: quoteA, b: quoteB },
+            env.DB,
           );
         }
       }
@@ -1060,12 +1105,12 @@ async function runOptionsScan(env: Env): Promise<void> {
         const direction: 'BUY' | 'SELL' = isRSIOversold ? 'BUY' : 'SELL';
         const conf = Math.min(90, 55 + (isRSIOversold ? (30 - rsi) * 2 : (rsi - 70) * 2) + (relativeATR > 0.04 ? 10 : 0));
         const signalType = isRSIOversold ? 'PUT_SELL_OPPORTUNITY' : 'CALL_SELL_OPPORTUNITY';
-        pushOptions(symbol, signalType, direction, conf, quote, indicators);
+        await pushOptions(symbol, signalType, direction, conf, quote, indicators, env.DB);
       } else if (isHighVol && Math.abs(quote.changePercent) > 3) {
         // Large move + high vol → momentum options play
         const direction: 'BUY' | 'SELL' = quote.changePercent > 0 ? 'BUY' : 'SELL';
         const conf = Math.min(85, 55 + Math.abs(quote.changePercent) * 3);
-        pushOptions(symbol, 'MOMENTUM_OPTIONS', direction, conf, quote, indicators);
+        await pushOptions(symbol, 'MOMENTUM_OPTIONS', direction, conf, quote, indicators, env.DB);
       }
     } catch (err) {
       console.error(`[Options] ${symbol} error:`, err);
@@ -1109,7 +1154,7 @@ async function runEventDrivenScan(env: Env): Promise<void> {
             );
             if (matchedSymbol) {
               const quote = await yahooFinance.getQuote(matchedSymbol);
-              pushEventDriven(
+              await pushEventDriven(
                 matchedSymbol,
                 `NEWS_${s.sentiment}`,
                 s.sentiment === 'BULLISH' ? 'BUY' : 'SELL',
@@ -1117,6 +1162,7 @@ async function runEventDrivenScan(env: Env): Promise<void> {
                 `Z.AI news sentiment: ${s.headline.slice(0, 80)}`,
                 [`Sentiment: ${s.sentiment} (${s.confidence}%)`, `Source: Google Alerts`],
                 quote || undefined,
+                env.DB,
               );
             }
           }
@@ -1145,7 +1191,7 @@ async function runEventDrivenScan(env: Env): Promise<void> {
           // Post-earnings move > 3% → event-driven signal
           const direction: 'BUY' | 'SELL' = quote.changePercent > 0 ? 'BUY' : 'SELL';
           const conf = Math.min(85, 55 + Math.abs(quote.changePercent) * 3);
-          pushEventDriven(
+          await pushEventDriven(
             e.symbol,
             'EARNINGS_REACTION',
             direction,
@@ -1153,6 +1199,7 @@ async function runEventDrivenScan(env: Env): Promise<void> {
             `Earnings reaction: ${e.symbol} moved ${quote.changePercent > 0 ? '+' : ''}${quote.changePercent.toFixed(1)}% post-earnings`,
             [`Move: ${quote.changePercent > 0 ? '+' : ''}${quote.changePercent.toFixed(1)}%`, `Time: ${e.hour === 'bmo' ? 'Pre-market' : 'After-hours'}`],
             quote,
+            env.DB,
           );
         }
       }
