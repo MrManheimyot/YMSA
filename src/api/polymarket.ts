@@ -184,3 +184,66 @@ function formatNumber(n: number): string {
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
   return n.toFixed(0);
 }
+
+/**
+ * Detect unusual prediction market activity — potential insider signals.
+ * Looks for: high-volume markets with extreme probabilities (>90% or <10%),
+ * recently created markets with disproportionate volume,
+ * and markets ending soon with high volume (potential information-driven bets).
+ */
+export async function detectUnusualActivity(limit: number = 50): Promise<{
+  market: PredictionMarket;
+  reason: string;
+  severity: 'HIGH' | 'MEDIUM';
+}[]> {
+  const markets = await getActiveMarkets(limit);
+  const unusual: { market: PredictionMarket; reason: string; severity: 'HIGH' | 'MEDIUM' }[] = [];
+
+  const now = Date.now();
+
+  for (const m of markets) {
+    // 1. Extreme probability with high volume — potential insider knowledge
+    const extremeOutcome = m.outcomes.find(o => o.price >= 0.92 || o.price <= 0.08);
+    if (extremeOutcome && m.volume >= 50000) {
+      const pct = (extremeOutcome.price * 100).toFixed(0);
+      unusual.push({
+        market: m,
+        reason: `Extreme probability: ${extremeOutcome.name} at ${pct}% with $${formatNumber(m.volume)} volume`,
+        severity: m.volume >= 200000 ? 'HIGH' : 'MEDIUM',
+      });
+      continue;
+    }
+
+    // 2. Event ending soon (<7 days) with disproportionate volume
+    if (m.endDate) {
+      const endMs = new Date(m.endDate).getTime();
+      const daysLeft = (endMs - now) / (24 * 60 * 60 * 1000);
+      if (daysLeft > 0 && daysLeft <= 7 && m.volume >= 100000) {
+        unusual.push({
+          market: m,
+          reason: `Ending in ${Math.ceil(daysLeft)}d with $${formatNumber(m.volume)} volume — potential informed positioning`,
+          severity: m.volume >= 500000 ? 'HIGH' : 'MEDIUM',
+        });
+        continue;
+      }
+    }
+
+    // 3. Very high volume-to-liquidity ratio — possible large single bets
+    if (m.liquidity > 0 && m.volume / m.liquidity >= 10 && m.volume >= 50000) {
+      unusual.push({
+        market: m,
+        reason: `Vol/Liq ratio ${(m.volume / m.liquidity).toFixed(0)}x — possible large concentrated bet ($${formatNumber(m.volume)})`,
+        severity: 'HIGH',
+      });
+      continue;
+    }
+  }
+
+  // Sort: HIGH severity first, then by volume
+  return unusual
+    .sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === 'HIGH' ? -1 : 1;
+      return b.market.volume - a.market.volume;
+    })
+    .slice(0, 5);
+}

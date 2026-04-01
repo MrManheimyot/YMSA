@@ -111,148 +111,399 @@ function getCryptoWatchlist(env: Env): string[] {
 
 // ═══════════════════════════════════════════════════════════════
 // MORNING BRIEFING — 07:00 IST
-// Full market overview: stocks, crypto, macro, prediction markets
+// Premium institutional-grade market intelligence report
 // ═══════════════════════════════════════════════════════════════
 
 async function runMorningBriefing(env: Env): Promise<void> {
-  const watchlist = getWatchlist(env);
-  const cryptoList = getCryptoWatchlist(env);
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  const timeStr = now.toLocaleTimeString('en-IL', { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Jerusalem' });
 
-  // Fetch all data in parallel — 5 arenas
+  // ── Parallel data fetch — all sources at once ──
   const [
-    stockQuotes,
-    marketNews,
-    earnings,
-    cryptoPrices,
-    cryptoGlobal,
+    allQuotes,
+    cryptoBTC,
     macroDashboard,
     yieldCurve,
-    topMarkets,
-    commodityQuotes,
+    moversResult,
+    unusualResult,
+    newsAlerts,
   ] = await Promise.all([
-    yahooFinance.getMultipleQuotes(watchlist),
-    finnhub.getMarketNews(env),
-    finnhub.getEarningsCalendar(env, 1),
-    coingecko.getCryptoPrices(cryptoList),
-    coingecko.getGlobalMarket(),
+    yahooFinance.getMultipleQuotes(['^GSPC', '^IXIC', '^DJI', 'GC=F', 'CL=F', 'AAPL', 'GOOGL', 'NVDA', 'MSFT', 'AMZN']),
+    yahooFinance.getQuote('BTC-USD'),
     fred.getMacroDashboard(env.FRED_API_KEY),
     fred.checkYieldCurve(env.FRED_API_KEY),
-    polymarket.getTopMarkets(5),
-    yahooFinance.getCommodityPrices(),
+    yahooFinance.screenUnusualMovers(10, 2.0, 6).catch(() => [] as any[]),
+    polymarket.detectUnusualActivity(50).catch(() => [] as any[]),
+    fetchGoogleAlerts().catch(() => [] as any[]),
   ]);
 
-  const now = new Date();
-  const lines: string[] = [
-    `📋 <b>YMSA Morning Brief — ${now.toISOString().split('T')[0]}</b>`,
-    `━━━━━━━━━━━━━━━━━━━━━━`,
-  ];
+  // Split quotes into groups
+  const quoteOf = (sym: string) => allQuotes.find(q => q.symbol === sym);
+  const indexQuotes = ['^GSPC', '^IXIC', '^DJI'].map(s => quoteOf(s)).filter(Boolean) as any[];
+  const commodityQuotes = ['GC=F', 'CL=F'].map(s => quoteOf(s)).filter(Boolean) as any[];
+  const coreQuotes = ['AAPL', 'GOOGL', 'NVDA', 'MSFT', 'AMZN'].map(s => quoteOf(s)).filter(Boolean) as any[];
 
-  // ── Agent 1: Stock Watchlist ──
-  lines.push(``, `📊 <b>Stock Watchlist:</b>`);
-  for (const q of stockQuotes.slice(0, 10)) {
-    const emoji = q.changePercent >= 0 ? '🟢' : '🔴';
-    lines.push(`  ${emoji} <b>${q.symbol}</b>: $${q.price.toFixed(2)} (${q.changePercent >= 0 ? '+' : ''}${q.changePercent.toFixed(2)}%)`);
+  // ── Helper formatting functions ──
+  const fmtChg = (pct: number): string => {
+    const sign = pct >= 0 ? '+' : '';
+    return `${sign}${pct.toFixed(2)}%`;
+  };
+  const fmtPrice = (p: number, decimals = 2): string => {
+    if (p >= 10000) return p.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    return p.toFixed(decimals);
+  };
+  const arrow = (pct: number): string => pct >= 0 ? '▲' : '▼';
+  const dot = (pct: number): string => pct >= 0 ? '🟢' : '🔴';
+
+  // ════════════════════════════════════════════════
+  // MESSAGE 1: Header + Section 1 (Indices) + Section 2 (Core Holdings)
+  // ════════════════════════════════════════════════
+
+  const msg1: string[] = [];
+
+  // Header
+  msg1.push(`Yigal the man, may you have a magical morning, from Tamir and Yotam.`);
+  msg1.push(``);
+  msg1.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  msg1.push(`📋 <b>YMSA MORNING INTELLIGENCE BRIEF</b>`);
+  msg1.push(`${dateStr} · ${timeStr} IST`);
+  msg1.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+
+  // ── SECTION 1: Market Pulse ──
+  msg1.push(``);
+  msg1.push(`<b>§1  MARKET PULSE — Key Benchmarks</b>`);
+  msg1.push(`───────────────────────────`);
+
+  const idxMap: Record<string, string> = { '^GSPC': 'S&P 500', '^IXIC': 'NASDAQ', '^DJI': 'DOW JONES' };
+  for (const q of indexQuotes) {
+    const name = idxMap[q.symbol] || q.symbol;
+    msg1.push(`${dot(q.changePercent)} <b>${name}</b>`);
+    msg1.push(`    ${fmtPrice(q.price)} ${arrow(q.changePercent)} ${fmtChg(q.changePercent)} (${q.change >= 0 ? '+' : ''}${fmtPrice(q.change)})`);
   }
 
-  // ── Agent 3: Crypto ──
-  if (cryptoPrices.length > 0) {
-    lines.push(``, `🪙 <b>Crypto:</b>`);
-    for (const c of cryptoPrices) {
-      const emoji = c.priceChange24h >= 0 ? '📈' : '📉';
-      lines.push(`  ${emoji} <b>${c.symbol}</b>: $${c.price.toLocaleString()} (${c.priceChange24h >= 0 ? '+' : ''}${c.priceChange24h.toFixed(1)}%)`);
-    }
-    if (cryptoGlobal) {
-      lines.push(`  💰 Total Market Cap: $${(cryptoGlobal.totalMarketCap / 1e12).toFixed(2)}T | BTC Dom: ${cryptoGlobal.btcDominance.toFixed(1)}%`);
-    }
+  // Gold
+  const gold = commodityQuotes.find(q => q.symbol === 'GC=F');
+  if (gold) {
+    msg1.push(`${dot(gold.changePercent)} <b>GOLD</b>`);
+    msg1.push(`    $${fmtPrice(gold.price)} ${arrow(gold.changePercent)} ${fmtChg(gold.changePercent)}`);
   }
 
-  // ── Agent 5: Commodities ──
-  if (commodityQuotes.length > 0) {
-    lines.push(``, `🛢️ <b>Commodities:</b>`);
-    for (const c of commodityQuotes) {
-      const emoji = c.changePercent >= 0 ? '🟢' : '🔴';
-      const name = yahooFinance.COMMODITY_SYMBOLS ? Object.entries(yahooFinance.COMMODITY_SYMBOLS).find(([, v]) => v === c.symbol)?.[0] || c.symbol : c.symbol;
-      lines.push(`  ${emoji} <b>${name}</b>: $${c.price.toFixed(2)} (${c.changePercent >= 0 ? '+' : ''}${c.changePercent.toFixed(2)}%)`);
-    }
+  // Oil WTI
+  const oil = commodityQuotes.find(q => q.symbol === 'CL=F');
+  if (oil) {
+    msg1.push(`${dot(oil.changePercent)} <b>OIL (WTI)</b>`);
+    msg1.push(`    $${fmtPrice(oil.price)} ${arrow(oil.changePercent)} ${fmtChg(oil.changePercent)}`);
   }
 
-  // ── Macro / FRED ──
-  if (yieldCurve) {
-    lines.push(``, `🏦 <b>Macro:</b>`);
-    lines.push(`  ${yieldCurve.signal}`);
-    lines.push(`  Yield Spread: ${yieldCurve.spread.toFixed(2)}%`);
+  // Bitcoin
+  if (cryptoBTC) {
+    msg1.push(`${dot(cryptoBTC.changePercent)} <b>BITCOIN</b>`);
+    msg1.push(`    $${fmtPrice(cryptoBTC.price, 0)} ${arrow(cryptoBTC.changePercent)} ${fmtChg(cryptoBTC.changePercent)}`);
   }
-  const vix = macroDashboard.find((m) => m.id === 'VIXCLS');
+
+  // VIX + Yield
+  const vix = macroDashboard.find(m => m.id === 'VIXCLS');
   if (vix) {
-    lines.push(`  ⚡ VIX: ${vix.value.toFixed(1)} (${vix.change >= 0 ? '+' : ''}${vix.change.toFixed(1)})`);
+    const vixEmoji = vix.value >= 25 ? '🔴' : vix.value >= 18 ? '🟡' : '🟢';
+    msg1.push(``);
+    msg1.push(`${vixEmoji} <b>VIX</b>: ${vix.value.toFixed(1)}${vix.change ? ` (${vix.change >= 0 ? '+' : ''}${vix.change.toFixed(1)})` : ''}`);
+  }
+  if (yieldCurve) {
+    const ycEmoji = yieldCurve.inverted ? '⚠️' : '✅';
+    msg1.push(`${ycEmoji} <b>Yield Curve</b>: ${yieldCurve.spread.toFixed(2)}% spread${yieldCurve.inverted ? ' — INVERTED' : ''}`);
   }
 
-  // ── Agent 4: Prediction Markets ──
-  if (topMarkets.length > 0) {
-    lines.push(``, `🎯 <b>Top Prediction Markets:</b>`);
-    for (const m of topMarkets.slice(0, 3)) {
-      const topOutcome = m.outcomes[0];
-      lines.push(`  • ${m.question.slice(0, 60)}${m.question.length > 60 ? '...' : ''}`);
-      if (topOutcome) {
-        lines.push(`    → ${topOutcome.name}: ${(topOutcome.price * 100).toFixed(0)}% | Vol: $${(m.volume / 1000).toFixed(0)}K`);
+  // ── SECTION 2: Core Holdings ──
+  msg1.push(``);
+  msg1.push(`<b>§2  CORE HOLDINGS — Daily Performance</b>`);
+  msg1.push(`───────────────────────────`);
+
+  for (const q of coreQuotes) {
+    const volRatio = q.avgVolume > 0 ? (q.volume / q.avgVolume) : 0;
+    const volFlag = volRatio >= 1.5 ? ' 📊' : '';
+    msg1.push(`${dot(q.changePercent)} <b>${q.symbol}</b>  $${fmtPrice(q.price)}  ${arrow(q.changePercent)} ${fmtChg(q.changePercent)}${volFlag}`);
+  }
+
+  await sendDailyBriefing(msg1.join('\n'), env);
+
+  // ════════════════════════════════════════════════
+  // MESSAGE 2: Section 3 (Unusual Movers) + Section 4 (Technical Picks)
+  // ════════════════════════════════════════════════
+
+  const msg2: string[] = [];
+
+  // ── SECTION 3: Unusual Movers ──
+  msg2.push(`<b>§3  UNUSUAL MOVERS — 10%+ Change, 2x+ Volume</b>`);
+  msg2.push(`───────────────────────────`);
+
+  try {
+    const movers = moversResult;
+    if (movers.length > 0) {
+      for (const q of movers) {
+        const volRatio = q.avgVolume > 0 ? (q.volume / q.avgVolume).toFixed(1) : '?';
+        msg2.push(`${dot(q.changePercent)} <b>${q.symbol}</b>  $${fmtPrice(q.price)}  ${arrow(q.changePercent)} ${fmtChg(q.changePercent)}`);
+        msg2.push(`    Vol: ${(q.volume / 1e6).toFixed(1)}M (${volRatio}x avg) — Requires attention`);
+      }
+    } else {
+      msg2.push(`  No Russell 1000 stocks met the 10%+ / 2x volume threshold today.`);
+      msg2.push(`  <i>Market volatility is contained.</i>`);
+    }
+  } catch {
+    msg2.push(`  <i>Screener data unavailable.</i>`);
+  }
+
+  // ── SECTION 4: Technical Conviction Picks ──
+  msg2.push(``);
+  msg2.push(`<b>§4  TECHNICAL CONVICTION — Multi-Indicator Screen</b>`);
+  msg2.push(`───────────────────────────`);
+  msg2.push(`<i>Stocks scoring on ≥3 indicators (RSI, MACD, EMA, BB, ATR)</i>`);
+  msg2.push(``);
+
+  try {
+    const techUniverse = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map(s => s.trim()).filter(Boolean);
+    const tier2 = (env.TIER2_WATCHLIST || '').split(',').map(s => s.trim()).filter(Boolean);
+    const allSymbols = [...new Set([...techUniverse, ...tier2])].slice(0, 15);
+
+    interface TechPick {
+      symbol: string;
+      price: number;
+      changePct: number;
+      score: number;
+      signals: string[];
+      direction: 'BULLISH' | 'BEARISH';
+    }
+
+    const picks: TechPick[] = [];
+
+    // Pre-fetch all quotes in one batch call
+    const allQuotes = await yahooFinance.getMultipleQuotes(allSymbols);
+    const quoteMap = new Map(allQuotes.map(q => [q.symbol, q]));
+
+    // Fetch OHLCV in parallel batches of 8
+    const BATCH_SIZE = 8;
+    for (let b = 0; b < allSymbols.length; b += BATCH_SIZE) {
+      const batch = allSymbols.slice(b, b + BATCH_SIZE);
+      const ohlcvResults = await Promise.all(
+        batch.map(sym => yahooFinance.getOHLCV(sym, '6mo', '1d').catch(() => []))
+      );
+
+      for (let i = 0; i < batch.length; i++) {
+        const symbol = batch[i];
+        const quote = quoteMap.get(symbol);
+        const ohlcv = ohlcvResults[i];
+        if (!quote || ohlcv.length < 50) continue;
+
+        const indicators = computeIndicators(symbol, ohlcv);
+        const rsi = indicators.find(ind => ind.indicator === 'RSI')?.value;
+        const macd = indicators.find(ind => ind.indicator === 'MACD')?.value;
+        const macdSig = indicators.find(ind => ind.indicator === 'MACD_SIGNAL')?.value;
+        const ema50 = indicators.find(ind => ind.indicator === 'EMA_50')?.value;
+        const ema200 = indicators.find(ind => ind.indicator === 'EMA_200')?.value;
+        const sma50 = indicators.find(ind => ind.indicator === 'SMA_50')?.value;
+        const atr = indicators.find(ind => ind.indicator === 'ATR')?.value;
+
+        // Bollinger Bands (from OHLCV)
+        const chronological = [...ohlcv].reverse();
+        const closes = chronological.map(c => c.close);
+        let bbLower = 0, bbUpper = 0;
+        if (closes.length >= 20) {
+          const slice = closes.slice(closes.length - 20);
+          const mean = slice.reduce((s, p) => s + p, 0) / 20;
+          const stdDev = Math.sqrt(slice.reduce((s, p) => s + (p - mean) ** 2, 0) / 20);
+          bbLower = mean - 2 * stdDev;
+          bbUpper = mean + 2 * stdDev;
+        }
+
+        const bullSignals: string[] = [];
+        const bearSignals: string[] = [];
+
+        // RSI
+        if (rsi != null) {
+          if (rsi <= 30) bullSignals.push(`RSI ${rsi.toFixed(0)} (oversold)`);
+          else if (rsi >= 70) bearSignals.push(`RSI ${rsi.toFixed(0)} (overbought)`);
+        }
+
+        // MACD crossover
+        if (macd != null && macdSig != null) {
+          if (macd > macdSig && macd > 0) bullSignals.push(`MACD bullish cross`);
+          else if (macd < macdSig && macd < 0) bearSignals.push(`MACD bearish cross`);
+        }
+
+        // EMA alignment
+        if (ema50 != null && ema200 != null) {
+          if (quote.price > ema50 && ema50 > ema200) bullSignals.push(`EMA 50>200 aligned`);
+          else if (quote.price < ema50 && ema50 < ema200) bearSignals.push(`EMA 50<200 aligned`);
+        }
+
+        // Bollinger Band touch
+        if (bbLower > 0) {
+          if (quote.price <= bbLower * 1.01) bullSignals.push(`BB lower band touch`);
+          else if (quote.price >= bbUpper * 0.99) bearSignals.push(`BB upper band touch`);
+        }
+
+        // ATR expansion (high volatility = opportunity)
+        if (atr != null && quote.price > 0 && (atr / quote.price) >= 0.035) {
+          const sig = `ATR ${((atr / quote.price) * 100).toFixed(1)}% (expanded)`;
+          if (bullSignals.length >= bearSignals.length) bullSignals.push(sig);
+          else bearSignals.push(sig);
+        }
+
+        // Price near SMA 50 support/resistance
+        if (sma50 != null && quote.price > 0) {
+          const distPct = ((quote.price - sma50) / sma50) * 100;
+          if (distPct >= -2 && distPct <= 2) {
+            if (quote.price > sma50) bullSignals.push(`At SMA50 support`);
+            else bearSignals.push(`At SMA50 resistance`);
+          }
+        }
+
+        const isBullish = bullSignals.length >= bearSignals.length;
+        const signals = isBullish ? bullSignals : bearSignals;
+        const score = signals.length;
+
+        if (score >= 3) {
+          picks.push({
+            symbol,
+            price: quote.price,
+            changePct: quote.changePercent,
+            score,
+            signals,
+            direction: isBullish ? 'BULLISH' : 'BEARISH',
+          });
+        }
       }
     }
-  }
 
-  // ── Earnings ──
-  if (earnings.length > 0) {
-    lines.push(``, `📅 <b>Today's Earnings:</b>`);
-    for (const e of earnings.slice(0, 5)) {
-      const time = e.hour === 'bmo' ? '🌅 Pre' : '🌙 After';
-      lines.push(`  • ${e.symbol} — ${time}`);
+    picks.sort((a, b) => b.score - a.score);
+    const topPicks = picks.slice(0, 10);
+
+    if (topPicks.length > 0) {
+      for (let i = 0; i < topPicks.length; i++) {
+        const p = topPicks[i];
+        const dirEmoji = p.direction === 'BULLISH' ? '🟢' : '🔴';
+        msg2.push(`${dirEmoji} <b>${i + 1}. ${p.symbol}</b>  $${fmtPrice(p.price)}  ${arrow(p.changePct)} ${fmtChg(p.changePct)}`);
+        msg2.push(`    ${p.direction} · ${p.score} indicators: ${p.signals.join(' · ')}`);
+      }
+    } else {
+      msg2.push(`  No stocks met the 3+ indicator threshold.`);
+      msg2.push(`  <i>Market in low-conviction state — reduce exposure.</i>`);
     }
+  } catch {
+    msg2.push(`  <i>Technical scan unavailable.</i>`);
   }
 
-  // ── News ──
-  if (marketNews.length > 0) {
-    lines.push(``, `📰 <b>Headlines:</b>`);
-    for (const news of marketNews.slice(0, 3)) {
-      lines.push(`  • ${news.headline.slice(0, 80)}${news.headline.length > 80 ? '...' : ''}`);
-    }
-  }
+  await sendDailyBriefing(msg2.join('\n'), env);
 
-  // ── Google Alerts ──
+  // ════════════════════════════════════════════════
+  // MESSAGE 3: Section 5 (Prediction Markets) + Section 6 (Google Alerts) + Footer
+  // ════════════════════════════════════════════════
+
+  const msg3: string[] = [];
+
+  // ── SECTION 5: Prediction Markets — Unusual Activity Only ──
+  msg3.push(`<b>§5  PREDICTION MARKETS — Unusual Activity Scan</b>`);
+  msg3.push(`───────────────────────────`);
+  msg3.push(`<i>Scanning for potential insider-driven positioning</i>`);
+  msg3.push(``);
+
   try {
-    const newsAlerts = await fetchGoogleAlerts();
-    if (newsAlerts.length > 0) {
-      if (env.DB) await storeNewsAlerts(newsAlerts, env.DB);
-      const recent = newsAlerts.filter(n => Date.now() - new Date(n.published).getTime() < 24 * 60 * 60 * 1000);
-      if (recent.length > 0) {
-        lines.push(``, `🔔 <b>Google Alerts (${recent.length} new):</b>`);
-        for (const alert of recent.slice(0, 5)) {
-          lines.push(`  • [${alert.category}] ${alert.title.slice(0, 70)}${alert.title.length > 70 ? '...' : ''}`);
+    const unusual = unusualResult;
+    if (unusual.length > 0) {
+      for (const u of unusual) {
+        const sevEmoji = u.severity === 'HIGH' ? '🚨' : '⚠️';
+        msg3.push(`${sevEmoji} <b>${u.market.question.slice(0, 65)}${u.market.question.length > 65 ? '...' : ''}</b>`);
+        msg3.push(`    ${u.reason}`);
+        const topOutcome = u.market.outcomes[0];
+        if (topOutcome) {
+          msg3.push(`    → ${topOutcome.name}: ${(topOutcome.price * 100).toFixed(0)}% | Vol: $${(u.market.volume / 1000).toFixed(0)}K`);
+        }
+        msg3.push(``);
+      }
+    } else {
+      msg3.push(`  No unusual activity detected across active markets.`);
+      msg3.push(`  <i>Prediction market positioning appears normal.</i>`);
+    }
+  } catch {
+    msg3.push(`  <i>Polymarket data unavailable.</i>`);
+  }
+
+  // ── SECTION 6: Google Alerts Intelligence ──
+  msg3.push(`<b>§6  NEWS INTELLIGENCE — Google Alerts</b>`);
+  msg3.push(`───────────────────────────`);
+
+  try {
+    if (env.DB && newsAlerts.length > 0) await storeNewsAlerts(newsAlerts, env.DB);
+    const recent = newsAlerts.filter((n: any) => Date.now() - new Date(n.published).getTime() < 24 * 60 * 60 * 1000);
+
+    if (recent.length > 0) {
+      // Diversify: pick from different categories, max 2 per category
+      const byCategory = new Map<string, typeof recent>();
+      for (const item of recent) {
+        const cat = item.category;
+        if (!byCategory.has(cat)) byCategory.set(cat, []);
+        byCategory.get(cat)!.push(item);
+      }
+
+      const diversified: typeof recent = [];
+      let round = 0;
+      while (diversified.length < 10 && round < 5) {
+        for (const [, items] of byCategory) {
+          if (round < items.length && diversified.length < 10) {
+            diversified.push(items[round]);
+          }
+        }
+        round++;
+      }
+
+      const catNameMap: Record<string, string> = {
+        'mega-tech': 'TECH', 'more-tech': 'TECH', 'mna': 'M&A',
+        'short-squeeze': 'FLOW', 'fed-rates': 'FED', 'earnings': 'EARN',
+        'sec-13f': '13F', 'crypto': 'CRYPTO', 'banks': 'BANKS',
+        'semis': 'SEMIS', 'buybacks': 'BUYBACK', 'crash-signals': 'RISK',
+      };
+
+      msg3.push(`<i>${recent.length} alerts in last 24h · showing ${diversified.length} diversified</i>`);
+      msg3.push(``);
+
+      for (let i = 0; i < diversified.length; i++) {
+        const item = diversified[i];
+        const catLabel = catNameMap[item.category] || item.category.toUpperCase();
+        msg3.push(`${i + 1}. [${catLabel}] ${item.title.slice(0, 75)}${item.title.length > 75 ? '...' : ''}`);
+      }
+    } else {
+      msg3.push(`  No new alerts in the last 24 hours.`);
+    }
+  } catch {
+    msg3.push(`  <i>Google Alerts unavailable.</i>`);
+  }
+
+  // ── Z.AI Market Sentiment (if available) ──
+  try {
+    if (isZAiAvailable(env)) {
+      const marketNews = await finnhub.getMarketNews(env);
+      if (marketNews.length > 0) {
+        const headlines = marketNews.slice(0, 8).map(n => n.headline);
+        const sentiment = await scoreNewsSentiment((env as any).AI, headlines);
+        if (sentiment.length > 0) {
+          const bullish = sentiment.filter(s => s.sentiment === 'BULLISH').length;
+          const bearish = sentiment.filter(s => s.sentiment === 'BEARISH').length;
+          const neutral = sentiment.length - bullish - bearish;
+          const overall = bullish > bearish ? '🟢 BULLISH' : bearish > bullish ? '🔴 BEARISH' : '⚪ NEUTRAL';
+          msg3.push(``);
+          msg3.push(`<b>🧠 Z.AI SENTIMENT</b>: ${overall} (${bullish}↑ ${bearish}↓ ${neutral}→)`);
         }
       }
     }
   } catch {}
 
-  // ── Z.AI News Sentiment ──
-  if (isZAiAvailable(env) && marketNews.length > 0) {
-    try {
-      const headlines = marketNews.slice(0, 8).map(n => n.headline);
-      const sentiment = await scoreNewsSentiment((env as any).AI, headlines);
-      if (sentiment.length > 0) {
-        const bullish = sentiment.filter(s => s.sentiment === 'BULLISH').length;
-        const bearish = sentiment.filter(s => s.sentiment === 'BEARISH').length;
-        const emoji = bullish > bearish ? '🟢' : bearish > bullish ? '🔴' : '⚪';
-        lines.push(``, `🧠 <b>Z.AI Sentiment:</b> ${emoji} ${bullish}B / ${bearish}🔴 / ${sentiment.length - bullish - bearish}⚪`);
-        for (const s of sentiment.slice(0, 3)) {
-          const icon = s.sentiment === 'BULLISH' ? '📈' : s.sentiment === 'BEARISH' ? '📉' : '➡️';
-          lines.push(`  ${icon} ${s.headline.slice(0, 60)}... (${s.confidence}%)`);
-        }
-      }
-    } catch (err) { console.error('[Z.AI] News sentiment failed:', err); }
-  }
+  // ── Footer ──
+  msg3.push(``);
+  msg3.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+  msg3.push(`<i>YMSA Intelligence · Automated · Confidential</i>`);
+  msg3.push(`<i>Data as of ${timeStr} IST — Pre-market conditions may vary</i>`);
 
-  lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
-  lines.push(`🎯 <i>Have a profitable day!</i>`);
-
-  await sendDailyBriefing(lines.join('\n'), env);
+  await sendDailyBriefing(msg3.join('\n'), env);
 }
 
 // ═══════════════════════════════════════════════════════════════

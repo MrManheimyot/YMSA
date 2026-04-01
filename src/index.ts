@@ -26,7 +26,7 @@ import { ensureEnv } from './utils/env-validator';
 import { log } from './utils/logger';
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, _ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
 
@@ -285,8 +285,8 @@ export default {
           return jsonResponse({ error: 'Missing or invalid ?job= parameter', validJobs: Object.keys(validJobs) }, 400);
         }
 
-        ctx.waitUntil(handleCronEvent(validJobs[job], env));
-        return jsonResponse({ status: `Triggered job: ${job}` });
+        await handleCronEvent(validJobs[job], env);
+        return jsonResponse({ status: `Triggered job: ${job}`, completed: true });
       }
 
       // ═══════════════════════════════════════════════════

@@ -212,3 +212,48 @@ export async function getQuoteWith52WeekAnalysis(symbol: string): Promise<{
     atNewLow: quote.price <= quote.week52Low,
   };
 }
+
+/**
+ * Screen for unusual movers — large-cap stocks with big daily moves and extreme volume.
+ * Scans a broad universe and returns stocks matching criteria.
+ */
+export async function screenUnusualMovers(
+  minChangePct: number = 10,
+  minVolumeRatio: number = 2.0,
+  limit: number = 6,
+): Promise<StockQuote[]> {
+  // Russell 1000 proxy: broad universe of large/mid-cap stocks
+  const universe = [
+    // Mega-cap tech + growth
+    'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','NFLX','AMD','AVGO',
+    'CRM','INTC','QCOM','PANW','SNOW','CRWD','PLTR','COIN','SMCI','ARM',
+    // Large-cap value
+    'BRK-B','UNH','JNJ','JPM','XOM','CVX','V','MA','PG','HD',
+    'LLY','WMT','BAC','GS','BA','CAT','GE','DE','RTX','LMT',
+    // High-beta / volatile names
+    'RIVN','LCID','ENPH','MELI','DASH','UBER','ABNB','SHOP','NET','DDOG',
+    'MRNA','GME','AMC','SOFI','HOOD','MARA','RIOT',
+  ];
+
+  const results: StockQuote[] = [];
+
+  // Fetch all in 2 batches (batch size ~30)
+  for (let i = 0; i < universe.length; i += 30) {
+    const batch = universe.slice(i, i + 30);
+    const quotes = await getMultipleQuotes(batch);
+    for (const q of quotes) {
+      if (
+        Math.abs(q.changePercent) >= minChangePct &&
+        q.avgVolume > 0 &&
+        q.volume / q.avgVolume >= minVolumeRatio
+      ) {
+        results.push(q);
+      }
+    }
+  }
+
+  // Sort by absolute change descending
+  return results
+    .sort((a, b) => Math.abs(b.changePercent) - Math.abs(a.changePercent))
+    .slice(0, limit);
+}
