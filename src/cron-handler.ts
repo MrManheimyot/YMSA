@@ -328,6 +328,28 @@ async function runFullScan(env: Env, label: string): Promise<void> {
 
   // ── Broker Manager: decide and send ──
   const sent = await flushCycle(env);
+
+  // ── Update engine performance stats from today's signals ──
+  try {
+    if (env.DB) {
+      const today = new Date().toISOString().split('T')[0];
+      const todayStart = new Date(today).getTime();
+      const rows = await env.DB.prepare(
+        `SELECT engine_id, COUNT(*) as cnt FROM signals WHERE created_at >= ? GROUP BY engine_id`
+      ).bind(todayStart).all();
+      const counts: Record<string, number> = {};
+      for (const r of (rows.results || []) as any[]) {
+        counts[r.engine_id] = r.cnt;
+      }
+      const engines = ['MTF_MOMENTUM', 'SMART_MONEY', 'STAT_ARB', 'OPTIONS', 'CRYPTO_DEFI', 'EVENT_DRIVEN'];
+      for (const engine of engines) {
+        await recordEnginePerformance(engine, counts[engine] || 0, 0, 0, 1.0, env);
+      }
+    }
+  } catch (e) {
+    console.log('[Cron] Engine stats update failed:', e);
+  }
+
   console.log(`[Cron] ${label}: Full scan complete — Broker sent ${sent} messages`);
 }
 

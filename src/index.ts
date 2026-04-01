@@ -362,6 +362,23 @@ export default {
       // ─── Engine Performance Stats ──────────────────
       if (path === '/api/engine-stats') {
         const latest = await getAllLatestEnginePerformance(env.DB!);
+        // Merge live signal counts from signals table for today
+        try {
+          const todayStart = new Date(new Date().toISOString().split('T')[0]).getTime();
+          const rows = await env.DB!.prepare(
+            `SELECT engine_id, COUNT(*) as cnt FROM signals WHERE created_at >= ? GROUP BY engine_id`
+          ).bind(todayStart).all();
+          const liveCounts: Record<string, number> = {};
+          for (const r of (rows.results || []) as any[]) {
+            liveCounts[r.engine_id] = r.cnt;
+          }
+          for (const eng of latest) {
+            if (liveCounts[eng.engine_id] && liveCounts[eng.engine_id] > eng.signals_generated) {
+              eng.signals_generated = liveCounts[eng.engine_id];
+              eng.date = new Date().toISOString().split('T')[0];
+            }
+          }
+        } catch {}
         return jsonResponse({ engines: latest, count: latest.length });
       }
 
