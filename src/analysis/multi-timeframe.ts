@@ -2,7 +2,9 @@
 // Triple-Screen System: 4 timeframes with confluence scoring
 // Engine 1: Target 8-12% monthly via momentum & mean reversion
 
-import type { Env } from '../types';
+import type { Env, OHLCV } from '../types';
+import { getOHLCV } from '../api/yahoo-finance';
+import { computeIndicators } from './indicators';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -69,8 +71,6 @@ interface BulkResult {
   close?: number;
 }
 
-const CACHE_TTL = 300; // 5 minutes
-
 // ─── Main Analysis Function ──────────────────────────────────
 
 /**
@@ -82,37 +82,35 @@ export async function analyzeMultiTimeframe(
   env: Env
 ): Promise<MTFSignal | null> {
   try {
-    const tfConfigs = [
-      { key: 'weekly', interval: '1w' },
-      { key: 'daily', interval: '1d' },
-      { key: 'h4', interval: '4h' },
-    ];
-
     const data: Record<string, BulkResult> = {};
 
-    for (let i = 0; i < tfConfigs.length; i++) {
-      const tf = tfConfigs[i];
+    // Primary: Use Yahoo Finance OHLCV + local indicators (free, reliable)
+    const [weeklyOhlcv, dailyOhlcv] = await Promise.all([
+      getOHLCV(symbol, '2y', '1wk'),
+      getOHLCV(symbol, '1y', '1d'),
+    ]);
 
-      // Check cache first
-      const cacheKey = `mtf:${symbol}:${tf.interval}`;
-      if (env.YMSA_CACHE) {
+    if (dailyOhlcv.length < 30) return null;
+
+    data['weekly'] = buildBulkFromOHLCV(weeklyOhlcv);
+    data['daily'] = buildBulkFromOHLCV(dailyOhlcv);
+    // Use daily data as 4H proxy (Yahoo free tier doesn't have 4h for stocks)
+    // Use most recent 60 daily candles to approximate shorter-term behavior
+    data['h4'] = buildBulkFromOHLCV(dailyOhlcv.slice(0, 60));
+
+    // Optional: Enhance with TAAPI if available and cached
+    if (env.TAAPI_API_KEY && env.YMSA_CACHE) {
+      for (const tf of ['weekly', 'daily', 'h4'] as const) {
+        const interval = tf === 'weekly' ? '1w' : tf === 'daily' ? '1d' : '4h';
+        const cacheKey = `mtf:${symbol}:${interval}`;
         const cached = await env.YMSA_CACHE.get(cacheKey);
         if (cached) {
-          data[tf.key] = JSON.parse(cached);
-          continue;
+          const taapiData = JSON.parse(cached) as BulkResult;
+          // Merge TAAPI data (stochastic, supertrend not in local calc)
+          if (taapiData.stochK != null) data[tf].stochK = taapiData.stochK;
+          if (taapiData.stochD != null) data[tf].stochD = taapiData.stochD;
+          if (taapiData.supertrend != null) data[tf].supertrend = taapiData.supertrend;
         }
-      }
-
-      // Rate limit: 15s between calls for TAAPI free tier
-      if (i > 0) {
-        await new Promise(r => setTimeout(r, 15500));
-      }
-
-      const result = await fetchBulkMTF(symbol, tf.interval, env.TAAPI_API_KEY);
-      data[tf.key] = result;
-
-      if (env.YMSA_CACHE) {
-        await env.YMSA_CACHE.put(cacheKey, JSON.stringify(result), { expirationTtl: CACHE_TTL });
       }
     }
 
@@ -156,6 +154,94 @@ export async function analyzeMultiTimeframe(
     console.error(`[MTF] Error analyzing ${symbol}:`, err);
     return null;
   }
+}
+
+/**
+ * Build BulkResult from OHLCV candles using local indicator computation.
+ * Eliminates dependency on TAAPI API for core functionality.
+ */
+function buildBulkFromOHLCV(candles: OHLCV[]): BulkResult {
+  if (candles.length < 30) return {};
+  const indicators = computeIndicators('_', candles);
+  const ind = (name: string) => indicators.find(i => i.indicator === name)?.value;
+
+  // Chronological order for BB calculation
+  const chronological = [...candles].reverse();
+  const prices = chronological.map(c => c.close);
+
+  // Bollinger Bands (20-period)
+  let bbUpper: number | undefined, bbMiddle: number | undefined, bbLower: number | undefined;
+  if (prices.length >= 20) {
+    const slice = prices.slice(prices.length - 20);
+    const mean = slice.reduce((s, p) => s + p, 0) / 20;
+    const variance = slice.reduce((s, p) => s + (p - mean) ** 2, 0) / 20;
+    const stdDev = Math.sqrt(variance);
+    bbMiddle = mean;
+    bbUpper = mean + 2 * stdDev;
+    bbLower = mean - 2 * stdDev;
+  }
+
+  // EMA 9, 21, 55 (local calc)
+  const ema9 = calcLocalEMA(prices, 9);
+  const ema21 = calcLocalEMA(prices, 21);
+  const ema55 = calcLocalEMA(prices, 55);
+
+  return {
+    rsi: ind('RSI'),
+    macd: ind('MACD'),
+    macdSignal: ind('MACD_SIGNAL'),
+    macdHist: ind('MACD_HISTOGRAM'),
+    ema9: ema9 ?? undefined,
+    ema21: ema21 ?? undefined,
+    ema55: ema55 ?? undefined,
+    ema200: ind('EMA_200') ?? ind('SMA_200'),
+    adx: calcLocalADX(chronological),
+    atr: ind('ATR'),
+    bbUpper,
+    bbMiddle,
+    bbLower,
+    close: candles[0]?.close, // Most recent (Yahoo Finance default order)
+  };
+}
+
+function calcLocalEMA(prices: number[], period: number): number | null {
+  if (prices.length < period) return null;
+  const k = 2 / (period + 1);
+  let ema = prices.slice(0, period).reduce((s, p) => s + p, 0) / period;
+  for (let i = period; i < prices.length; i++) ema = prices[i] * k + ema * (1 - k);
+  return ema;
+}
+
+function calcLocalADX(candles: OHLCV[], period: number = 14): number | undefined {
+  if (candles.length < period * 2) return undefined;
+  let plusDMSum = 0, minusDMSum = 0, trSum = 0;
+  for (let i = 1; i <= period; i++) {
+    const upMove = candles[i].high - candles[i - 1].high;
+    const downMove = candles[i - 1].low - candles[i].low;
+    const plusDM = upMove > downMove && upMove > 0 ? upMove : 0;
+    const minusDM = downMove > upMove && downMove > 0 ? downMove : 0;
+    const tr = Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i - 1].close), Math.abs(candles[i].low - candles[i - 1].close));
+    plusDMSum += plusDM; minusDMSum += minusDM; trSum += tr;
+  }
+  const dxValues: number[] = [];
+  for (let i = period + 1; i < candles.length; i++) {
+    const upMove = candles[i].high - candles[i - 1].high;
+    const downMove = candles[i - 1].low - candles[i].low;
+    const plusDM = upMove > downMove && upMove > 0 ? upMove : 0;
+    const minusDM = downMove > upMove && downMove > 0 ? downMove : 0;
+    const tr = Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i - 1].close), Math.abs(candles[i].low - candles[i - 1].close));
+    plusDMSum = plusDMSum - plusDMSum / period + plusDM;
+    minusDMSum = minusDMSum - minusDMSum / period + minusDM;
+    trSum = trSum - trSum / period + tr;
+    const plusDI = trSum > 0 ? (plusDMSum / trSum) * 100 : 0;
+    const minusDI = trSum > 0 ? (minusDMSum / trSum) * 100 : 0;
+    const diSum = plusDI + minusDI;
+    if (diSum > 0) dxValues.push(Math.abs(plusDI - minusDI) / diSum * 100);
+  }
+  if (dxValues.length < period) return undefined;
+  let adx = dxValues.slice(0, period).reduce((s, v) => s + v, 0) / period;
+  for (let i = period; i < dxValues.length; i++) adx = (adx * (period - 1) + dxValues[i]) / period;
+  return adx;
 }
 
 /**
@@ -229,9 +315,9 @@ export function formatMTFAlert(signal: MTFSignal): string {
   ].join('\n');
 }
 
-// ─── Internal Helpers ────────────────────────────────────────
+// ─── Internal Helpers (TAAPI — kept for optional cache warming) ──
 
-async function fetchBulkMTF(
+export async function fetchBulkMTF(
   symbol: string,
   interval: string,
   apiKey: string

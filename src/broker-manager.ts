@@ -256,6 +256,124 @@ export function pushTechnical(
   });
 }
 
+/**
+ * Push a pairs/stat-arb signal through broker manager
+ */
+export function pushStatArb(
+  pair: { symbolA: string; symbolB: string; zScore: number; direction: string; halfLife: number; correlation: number },
+  quotes: { a: StockQuote; b: StockQuote },
+): void {
+  const dir: 'BUY' | 'SELL' = pair.direction === 'LONG_A_SHORT_B' ? 'BUY' : 'SELL';
+  const zsAbs = Math.abs(pair.zScore);
+  const conf = Math.min(95, 50 + zsAbs * 15 + (pair.correlation > 0.8 ? 10 : 0));
+  if (conf < 55) return;
+
+  const entryA = quotes.a.price;
+  const atr = entryA * 0.02;
+
+  pushEngineOutput({
+    engine: 'Stat Arb',
+    symbol: pair.symbolA,
+    direction: dir,
+    confidence: conf,
+    entry: entryA,
+    stopLoss: dir === 'BUY' ? entryA - atr * 2 : entryA + atr * 2,
+    tp1: dir === 'BUY' ? entryA + atr * 1.5 : entryA - atr * 1.5,
+    tp2: dir === 'BUY' ? entryA + atr * 3 : entryA - atr * 3,
+    reason: `Pairs divergence: ${pair.symbolA}/${pair.symbolB} z-score ${pair.zScore.toFixed(2)} | Corr: ${pair.correlation.toFixed(2)} | Half-life: ${pair.halfLife.toFixed(0)}d.`,
+    signals: [
+      `Z-Score: ${pair.zScore.toFixed(2)} (${zsAbs > 2 ? 'extreme' : 'notable'})`,
+      `Pair: ${pair.direction.replace(/_/g, ' ')}`,
+      `Half-Life: ${pair.halfLife.toFixed(0)} days`,
+      `Correlation: ${pair.correlation.toFixed(2)}`,
+    ],
+  });
+}
+
+/**
+ * Push crypto/DeFi whale signal through broker manager
+ */
+export function pushCryptoDefi(
+  signal: { symbol: string; type: string; volume: number; priceChange: number; liquidity: number },
+  confidence: number,
+): void {
+  if (confidence < 50) return;
+  const dir: 'BUY' | 'SELL' = signal.priceChange >= 0 ? 'BUY' : 'SELL';
+
+  pushEngineOutput({
+    engine: 'Crypto DeFi',
+    symbol: signal.symbol,
+    direction: dir,
+    confidence,
+    reason: `${signal.type}: ${signal.symbol} with $${(signal.volume / 1e6).toFixed(1)}M volume, ${signal.priceChange >= 0 ? '+' : ''}${signal.priceChange.toFixed(1)}% move.`,
+    signals: [
+      `Type: ${signal.type}`,
+      `Volume: $${(signal.volume / 1e6).toFixed(1)}M`,
+      `Price Change: ${signal.priceChange >= 0 ? '+' : ''}${signal.priceChange.toFixed(1)}%`,
+      `Liquidity: $${(signal.liquidity / 1e6).toFixed(1)}M`,
+    ],
+  });
+}
+
+/**
+ * Push event-driven signal (news/earnings) through broker manager
+ */
+export function pushEventDriven(
+  symbol: string,
+  _eventType: string,
+  direction: 'BUY' | 'SELL',
+  confidence: number,
+  reason: string,
+  signals: string[],
+  quote?: StockQuote,
+): void {
+  if (confidence < 50) return;
+  const atr = quote ? quote.price * 0.02 : 0;
+
+  pushEngineOutput({
+    engine: 'Event Driven',
+    symbol,
+    direction,
+    confidence,
+    entry: quote?.price,
+    stopLoss: quote ? (direction === 'BUY' ? quote.price - atr * 2.5 : quote.price + atr * 2.5) : undefined,
+    tp1: quote ? (direction === 'BUY' ? quote.price + atr * 2 : quote.price - atr * 2) : undefined,
+    reason,
+    signals,
+  });
+}
+
+/**
+ * Push options-style signal (high IV / squeeze) through broker manager
+ */
+export function pushOptions(
+  symbol: string,
+  signalType: string,
+  direction: 'BUY' | 'SELL',
+  confidence: number,
+  quote: StockQuote,
+  indicators: TechnicalIndicator[],
+): void {
+  if (confidence < 50) return;
+  const atr = indicators.find(i => i.indicator === 'ATR')?.value ?? quote.price * 0.02;
+
+  pushEngineOutput({
+    engine: 'Options',
+    symbol,
+    direction,
+    confidence,
+    entry: quote.price,
+    stopLoss: direction === 'BUY' ? quote.price - atr * 1.5 : quote.price + atr * 1.5,
+    tp1: direction === 'BUY' ? quote.price + atr * 2 : quote.price - atr * 2,
+    tp2: direction === 'BUY' ? quote.price + atr * 4 : quote.price - atr * 4,
+    reason: `${signalType}: ${symbol} showing options-grade setup with ${confidence}% confidence.`,
+    signals: [
+      `Signal: ${signalType}`,
+      ...indicators.filter(i => ['RSI', 'ATR', 'BB_WIDTH'].includes(i.indicator)).map(i => `${i.indicator}: ${i.value.toFixed(2)}`),
+    ].slice(0, 4),
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════
 // Step 2: Analyze — merge, rank, filter
 // ═══════════════════════════════════════════════════════════════

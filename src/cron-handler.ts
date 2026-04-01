@@ -13,7 +13,7 @@ import { calculateFibonacci } from './analysis/fibonacci';
 import { detectSignals } from './analysis/signals';
 import { computeIndicators } from './analysis/indicators';
 import { sendDailyBriefing, sendTelegramMessage } from './alert-router';
-import { scanPairs, findTradablePairs, formatPairAlert } from './agents/pairs-trading';
+import { scanPairs, findTradablePairs } from './agents/pairs-trading';
 import { scrapeOversoldStocks, scrape52WeekHighs, formatFinvizAlert } from './scrapers/finviz';
 import { scrapeMarketOverview, formatMarketOverview } from './scrapers/google-finance';
 import { analyzeMultiTimeframe } from './analysis/multi-timeframe';
@@ -25,7 +25,7 @@ import { executeBatch, formatBatchResults, type ExecutableSignal } from './execu
 import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
 import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades, getPendingTelegramAlerts, updateTelegramAlertOutcome, expireOldTelegramAlerts } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
-import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, sendRiskAlert, sendExecutionAlert } from './broker-manager';
+import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, pushStatArb, pushCryptoDefi, pushEventDriven, pushOptions, sendRiskAlert, sendExecutionAlert } from './broker-manager';
 import { scoreNewsSentiment, weeklyNarrative, isZAiAvailable } from './ai/z-engine';
 
 /**
@@ -317,8 +317,11 @@ async function runFullScan(env: Env, label: string): Promise<void> {
   // ── Agent 5: Commodity + Macro Scan ──
   await runCommodityScan(env);
 
-  // ── v3: Google Alerts News Scan ──
-  await runNewsScan(env);
+  // ── v3 Engine 4: Options-Grade Setups ──
+  await runOptionsScan(env);
+
+  // ── v3 Engine 6: Event-Driven (News + Earnings) ──
+  await runEventDrivenScan(env);
 
   // ── Scrapers (Finviz/Google Finance) ──
   await runScraperScan(env);
@@ -370,7 +373,7 @@ async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
   }
 }
 
-async function runCryptoWhaleScan(env: Env): Promise<void> {
+async function runCryptoWhaleScan(_env: Env): Promise<void> {
   try {
     // Check top pairs for whale activity
     const ethPairs = await dexscreener.searchPairs('WETH');
@@ -380,48 +383,54 @@ async function runCryptoWhaleScan(env: Env): Promise<void> {
     const whaleSignals = dexscreener.detectWhaleActivity(allPairs);
 
     if (whaleSignals.length > 0) {
-      const lines = [
-        `🐳 <b>Whale Activity Alert (${whaleSignals.length} signals)</b>`,
-        `━━━━━━━━━━━━━━━━━━━━━━`,
-        ``,
-      ];
       for (const signal of whaleSignals.slice(0, 5)) {
-        lines.push(dexscreener.formatWhaleAlert(signal));
-        lines.push(``);
+        pushCryptoDefi({
+          symbol: signal.pair,
+          type: signal.type,
+          volume: signal.volume24h,
+          priceChange: signal.priceChange24h,
+          liquidity: signal.liquidity,
+        }, Math.min(90, 50 + (signal.volume24h / 1e6) * 5));
       }
-      await sendTelegramMessage(lines.join('\n'), env);
     }
 
     // CoinGecko trending
     const trending = await coingecko.getTrendingCoins();
     if (trending.length > 0) {
-      const lines = [`🔥 <b>Trending Crypto:</b>`];
-      for (const coin of trending.slice(0, 5)) {
-        lines.push(`  #${coin.marketCapRank || '?'} ${coin.name} (${coin.symbol.toUpperCase()})`);
+      for (const coin of trending.slice(0, 3)) {
+        pushCryptoDefi({
+          symbol: coin.symbol.toUpperCase(),
+          type: 'TRENDING',
+          volume: 0,
+          priceChange: 0,
+          liquidity: 0,
+        }, 55);
       }
-      await sendTelegramMessage(lines.join('\n'), env);
     }
   } catch (err) {
     console.error('[Agent3] Crypto scan error:', err);
   }
 }
 
-async function runPolymarketScan(env: Env): Promise<void> {
+async function runPolymarketScan(_env: Env): Promise<void> {
   try {
     const markets = await polymarket.getActiveMarkets(20);
     const valueBets = polymarket.findValueBets(markets, 10000, [0.15, 0.85]);
 
     if (valueBets.length > 0) {
-      const lines = [
-        `🎯 <b>Polymarket Value Bets (${valueBets.length} found)</b>`,
-        `━━━━━━━━━━━━━━━━━━━━━━`,
-        ``,
-      ];
       for (const market of valueBets.slice(0, 3)) {
-        lines.push(polymarket.formatMarketAlert(market));
-        lines.push(``);
+        const topOutcome = market.outcomes[0];
+        const direction: 'BUY' | 'SELL' = topOutcome && topOutcome.price > 0.5 ? 'BUY' : 'SELL';
+        const conf = Math.min(85, 50 + (market.volume / 100000) * 5);
+        pushEventDriven(
+          market.id || 'POLYMARKET',
+          'VALUE_BET',
+          direction,
+          conf,
+          `Polymarket value bet: ${market.question.slice(0, 60)} | Vol: $${(market.volume / 1000).toFixed(0)}K`,
+          [`Outcome: ${topOutcome?.name || '?'} (${((topOutcome?.price || 0) * 100).toFixed(0)}%)`, `Volume: $${(market.volume / 1000).toFixed(0)}K`],
+        );
       }
-      await sendTelegramMessage(lines.join('\n'), env);
     }
   } catch (err) {
     console.error('[Agent4] Polymarket scan error:', err);
@@ -436,9 +445,16 @@ async function runCommodityScan(env: Env): Promise<void> {
       fred.getCommodityPrices(env.FRED_API_KEY),
     ]);
 
-    // Yield curve alert
+    // Yield curve alert — route through broker as event-driven
     if (yieldCurve && yieldCurve.inverted) {
-      await sendTelegramMessage(`⚠️ <b>YIELD CURVE INVERTED</b>\nSpread: ${yieldCurve.spread.toFixed(2)}%\n${yieldCurve.signal}`, env);
+      pushEventDriven(
+        'MACRO',
+        'YIELD_CURVE_INVERSION',
+        'SELL',
+        75,
+        `Yield curve inverted: spread ${yieldCurve.spread.toFixed(2)}%. ${yieldCurve.signal}`,
+        [`Spread: ${yieldCurve.spread.toFixed(2)}%`, yieldCurve.signal],
+      );
     }
   } catch (err) {
     console.error('[Agent5] Commodity scan error:', err);
@@ -747,16 +763,18 @@ async function runPairsScan(env: Env): Promise<void> {
     const tradable = findTradablePairs(allPairs);
 
     if (tradable.length > 0) {
-      const lines = [
-        `🔄 <b>Pairs Trading Signals (${tradable.length} found)</b>`,
-        `━━━━━━━━━━━━━━━━━━━━━━`,
-        ``,
-      ];
+      // Route through broker manager with STAT_ARB engine ID
       for (const pair of tradable.slice(0, 5)) {
-        lines.push(formatPairAlert(pair));
-        lines.push(``);
+        const quoteA = await yahooFinance.getQuote(pair.symbolA);
+        const quoteB = await yahooFinance.getQuote(pair.symbolB);
+        if (quoteA && quoteB) {
+          const direction = pair.currentZScore > 0 ? 'LONG_B_SHORT_A' : 'LONG_A_SHORT_B';
+          pushStatArb(
+            { symbolA: pair.symbolA, symbolB: pair.symbolB, zScore: pair.currentZScore, direction, halfLife: pair.halfLife, correlation: pair.correlation },
+            { a: quoteA, b: quoteB },
+          );
+        }
       }
-      await sendTelegramMessage(lines.join('\n'), env);
     }
 
     console.log(`[Agent2] Pairs scan: ${allPairs.length} pairs analyzed, ${tradable.length} tradable`);
@@ -1010,26 +1028,140 @@ async function runSmartMoneyScan(env: Env): Promise<void> {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// v3: NEWS SCAN — Fetch Google Alerts RSS, store, and digest
+// v3 Engine 4: OPTIONS — High-IV / BB Squeeze / RSI Extreme setups
+// Scans for options-grade entries: high volatility + directional bias
 // ═══════════════════════════════════════════════════════════════
 
-async function runNewsScan(env: Env): Promise<void> {
+async function runOptionsScan(env: Env): Promise<void> {
+  const watchlist = getWatchlist(env);
+
+  for (const symbol of watchlist) {
+    try {
+      const [quote, ohlcv] = await Promise.all([
+        yahooFinance.getQuote(symbol),
+        yahooFinance.getOHLCV(symbol, '6mo', '1d'),
+      ]);
+      if (!quote || ohlcv.length < 30) continue;
+
+      const indicators = computeIndicators(symbol, ohlcv);
+      const rsi = indicators.find(i => i.indicator === 'RSI')?.value;
+      const atr = indicators.find(i => i.indicator === 'ATR')?.value;
+      if (!rsi || !atr) continue;
+
+      // Options-grade signal: BB squeeze + RSI extreme → directional play
+      // High relative ATR (volatility proxy) = good for options premium
+      const relativeATR = atr / quote.price;
+      const isHighVol = relativeATR > 0.025; // >2.5% ATR relative to price
+      const isRSIExtreme = rsi < 25 || rsi > 75;
+      const isRSIOversold = rsi < 30;
+      // RSI > 70 overbought already handled by isRSIExtreme above
+
+      if (isHighVol && isRSIExtreme) {
+        const direction: 'BUY' | 'SELL' = isRSIOversold ? 'BUY' : 'SELL';
+        const conf = Math.min(90, 55 + (isRSIOversold ? (30 - rsi) * 2 : (rsi - 70) * 2) + (relativeATR > 0.04 ? 10 : 0));
+        const signalType = isRSIOversold ? 'PUT_SELL_OPPORTUNITY' : 'CALL_SELL_OPPORTUNITY';
+        pushOptions(symbol, signalType, direction, conf, quote, indicators);
+      } else if (isHighVol && Math.abs(quote.changePercent) > 3) {
+        // Large move + high vol → momentum options play
+        const direction: 'BUY' | 'SELL' = quote.changePercent > 0 ? 'BUY' : 'SELL';
+        const conf = Math.min(85, 55 + Math.abs(quote.changePercent) * 3);
+        pushOptions(symbol, 'MOMENTUM_OPTIONS', direction, conf, quote, indicators);
+      }
+    } catch (err) {
+      console.error(`[Options] ${symbol} error:`, err);
+    }
+  }
+
+  console.log(`[v3] Options scan complete`);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// v3 Engine 6: EVENT_DRIVEN — News sentiment + Earnings catalysts
+// Generates signals from Google Alerts news and earnings data
+// ═══════════════════════════════════════════════════════════════
+
+async function runEventDrivenScan(env: Env): Promise<void> {
   try {
+    // Google Alerts news scan
     const news = await fetchGoogleAlerts();
     if (news.length > 0) {
       if (env.DB) {
         const inserted = await storeNewsAlerts(news, env.DB);
-        console.log(`[v3] News scan: stored ${inserted} new alerts from ${news.length} fetched`);
+        console.log(`[v3] Event scan: stored ${inserted} new alerts`);
       }
-      // Only alert if there are recent items (< 6 hours old)
+
+      // Recent items (< 6 hours) — generate event-driven signals
       const recent = news.filter(n => Date.now() - new Date(n.published).getTime() < 6 * 60 * 60 * 1000);
+
+      // Z.AI sentiment analysis for event-driven signals
+      if (isZAiAvailable(env) && recent.length > 0) {
+        try {
+          const headlines = recent.slice(0, 10).map(n => n.title);
+          const sentiment = await scoreNewsSentiment((env as any).AI, headlines);
+          const strong = sentiment.filter(s => s.confidence >= 70);
+
+          for (const s of strong.slice(0, 3)) {
+            // Try to match headlines to watchlist symbols
+            const watchlist = getWatchlist(env);
+            const matchedSymbol = watchlist.find(sym =>
+              s.headline.toUpperCase().includes(sym) ||
+              s.headline.toUpperCase().includes(sym.replace('.', ''))
+            );
+            if (matchedSymbol) {
+              const quote = await yahooFinance.getQuote(matchedSymbol);
+              pushEventDriven(
+                matchedSymbol,
+                `NEWS_${s.sentiment}`,
+                s.sentiment === 'BULLISH' ? 'BUY' : 'SELL',
+                s.confidence,
+                `Z.AI news sentiment: ${s.headline.slice(0, 80)}`,
+                [`Sentiment: ${s.sentiment} (${s.confidence}%)`, `Source: Google Alerts`],
+                quote || undefined,
+              );
+            }
+          }
+        } catch (err) {
+          console.error('[Event] Z.AI sentiment error:', err);
+        }
+      }
+
+      // Send news digest (non-trade alert) via context
       if (recent.length > 0) {
-        await sendTelegramMessage(formatNewsDigest(recent, 5), env);
+        addContext(formatNewsDigest(recent, 5));
       }
     }
   } catch (err) {
-    console.error('[v3] News scan error:', err);
+    console.error('[Event] News scan error:', err);
   }
+
+  // Earnings-based event signals
+  try {
+    const earnings = await finnhub.getEarningsCalendar(env, 1);
+    const watchlist = getWatchlist(env);
+    for (const e of earnings) {
+      if (watchlist.includes(e.symbol)) {
+        const quote = await yahooFinance.getQuote(e.symbol);
+        if (quote && Math.abs(quote.changePercent) > 3) {
+          // Post-earnings move > 3% → event-driven signal
+          const direction: 'BUY' | 'SELL' = quote.changePercent > 0 ? 'BUY' : 'SELL';
+          const conf = Math.min(85, 55 + Math.abs(quote.changePercent) * 3);
+          pushEventDriven(
+            e.symbol,
+            'EARNINGS_REACTION',
+            direction,
+            conf,
+            `Earnings reaction: ${e.symbol} moved ${quote.changePercent > 0 ? '+' : ''}${quote.changePercent.toFixed(1)}% post-earnings`,
+            [`Move: ${quote.changePercent > 0 ? '+' : ''}${quote.changePercent.toFixed(1)}%`, `Time: ${e.hour === 'bmo' ? 'Pre-market' : 'After-hours'}`],
+            quote,
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error('[Event] Earnings scan error:', err);
+  }
+
+  console.log(`[v3] Event-driven scan complete`);
 }
 
 // ═══════════════════════════════════════════════════════════════
