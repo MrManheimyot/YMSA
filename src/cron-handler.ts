@@ -128,6 +128,8 @@ async function runMorningBriefing(env: Env): Promise<void> {
     moversResult,
     unusualResult,
     newsAlerts,
+    marketNews,
+    earningsToday,
   ] = await Promise.all([
     yahooFinance.getMultipleQuotes(['^GSPC', '^IXIC', '^DJI', 'GC=F', 'CL=F', 'AAPL', 'GOOGL', 'NVDA', 'MSFT', 'AMZN']),
     yahooFinance.getQuote('BTC-USD'),
@@ -136,6 +138,8 @@ async function runMorningBriefing(env: Env): Promise<void> {
     yahooFinance.screenUnusualMovers(10, 2.0, 6).catch(() => [] as any[]),
     polymarket.detectUnusualActivity(50).catch(() => [] as any[]),
     fetchGoogleAlerts().catch(() => [] as any[]),
+    finnhub.getMarketNews(env).catch(() => [] as any[]),
+    finnhub.getEarningsCalendar(env, 1).catch(() => [] as any[]),
   ]);
 
   // Split quotes into groups
@@ -225,6 +229,63 @@ async function runMorningBriefing(env: Env): Promise<void> {
     msg1.push(`${dot(q.changePercent)} <b>${q.symbol}</b>  $${fmtPrice(q.price)}  ${arrow(q.changePercent)} ${fmtChg(q.changePercent)}${volFlag}`);
   }
 
+  // ── MARKET INSIGHTS — data-driven commentary ──
+  msg1.push(``);
+  msg1.push(`<b>📌 KEY INSIGHTS</b>`);
+  msg1.push(`───────────────────────────`);
+
+  const spx = quoteOf('^GSPC');
+  const ndx = quoteOf('^IXIC');
+  const insights: string[] = [];
+
+  // Insight 1: Market regime from VIX + indices
+  if (vix && spx) {
+    if (vix.value >= 25) {
+      insights.push(`Fear is elevated — VIX at ${vix.value.toFixed(1)} signals hedging demand. Volatility-adjusted sizing recommended.`);
+    } else if (vix.value <= 14 && spx.changePercent > 0) {
+      insights.push(`Complacency watch — VIX sub-15 with equity drift higher. Low-vol regimes tend to end abruptly.`);
+    } else if (spx.changePercent > 1) {
+      insights.push(`Broad risk-on — S&P up ${fmtChg(spx.changePercent)} with VIX at ${vix.value.toFixed(1)}. Momentum favors longs but watch for mean reversion.`);
+    } else if (spx.changePercent < -1) {
+      insights.push(`Risk-off tone — S&P down ${fmtChg(spx.changePercent)}. Wait for stabilization before adding exposure.`);
+    } else {
+      insights.push(`Markets range-bound — S&P ${fmtChg(spx.changePercent)}, VIX ${vix.value.toFixed(1)}. Selective stock-picking favored over broad bets.`);
+    }
+  }
+
+  // Insight 2: Tech vs. broad market divergence
+  if (spx && ndx) {
+    const divergence = ndx.changePercent - spx.changePercent;
+    if (divergence > 0.8) {
+      insights.push(`Tech outperformance — NASDAQ leading by ${divergence.toFixed(1)}pp. Growth/AI names remain the preferred vehicle.`);
+    } else if (divergence < -0.8) {
+      insights.push(`Rotation out of tech — NASDAQ lagging by ${Math.abs(divergence).toFixed(1)}pp. Value and cyclicals attracting flows.`);
+    }
+  }
+
+  // Insight 3: Yield curve / macro
+  if (yieldCurve && yieldCurve.inverted) {
+    insights.push(`Yield curve inverted at ${yieldCurve.spread.toFixed(2)}% — historically a recession precursor. Defensive positioning warranted.`);
+  } else if (gold && gold.changePercent > 1.5) {
+    insights.push(`Gold surging ${fmtChg(gold.changePercent)} — safe-haven demand rising. Monitor for geopolitical escalation or dollar weakness.`);
+  } else if (cryptoBTC && cryptoBTC.changePercent > 3) {
+    insights.push(`Bitcoin up ${fmtChg(cryptoBTC.changePercent)} — risk appetite extends to digital assets. Institutional flows may be accelerating.`);
+  } else if (oil && Math.abs(oil.changePercent) > 2) {
+    insights.push(`Oil ${oil.changePercent > 0 ? 'spiking' : 'sliding'} ${fmtChg(oil.changePercent)} — energy sector ${oil.changePercent > 0 ? 'catching a bid' : 'under pressure'}. Watch for inflation implications.`);
+  }
+
+  // Ensure at least 2 insights
+  if (insights.length < 2 && moversResult.length > 0) {
+    insights.push(`${moversResult.length} unusual movers detected — elevated single-stock volatility signals active catalysts in play.`);
+  }
+  if (insights.length < 2) {
+    insights.push(`Quiet tape — no major dislocations. Focus on technical setups with defined risk.`);
+  }
+
+  for (const insight of insights.slice(0, 3)) {
+    msg1.push(`• ${insight}`);
+  }
+
   await sendDailyBriefing(msg1.join('\n'), env);
 
   // ════════════════════════════════════════════════
@@ -261,9 +322,17 @@ async function runMorningBriefing(env: Env): Promise<void> {
   msg2.push(``);
 
   try {
-    const techUniverse = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map(s => s.trim()).filter(Boolean);
+    // Broad 50-stock universe for reliable 10-pick output
+    const hardcodedUniverse = [
+      'AAPL','MSFT','GOOGL','AMZN','NVDA','META','TSLA','NFLX','AMD','AVGO',
+      'CRM','INTC','QCOM','PANW','CRWD','PLTR','COIN','SMCI','ARM','MRVL',
+      'JPM','GS','BAC','V','MA','UNH','LLY','JNJ','PFE','MRNA',
+      'XOM','CVX','BA','CAT','GE','DE','RTX','LMT','HD','WMT',
+      'UBER','ABNB','SHOP','DASH','NET','DDOG','SNOW','SQ','RIVN','ENPH',
+    ];
+    const envSymbols = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST || '').split(',').map(s => s.trim()).filter(Boolean);
     const tier2 = (env.TIER2_WATCHLIST || '').split(',').map(s => s.trim()).filter(Boolean);
-    const allSymbols = [...new Set([...techUniverse, ...tier2])].slice(0, 15);
+    const allSymbols = [...new Set([...envSymbols, ...tier2, ...hardcodedUniverse])].slice(0, 50);
 
     interface TechPick {
       symbol: string;
@@ -318,10 +387,10 @@ async function runMorningBriefing(env: Env): Promise<void> {
         const bullSignals: string[] = [];
         const bearSignals: string[] = [];
 
-        // RSI
+        // RSI (relaxed to 35/65 for broader coverage)
         if (rsi != null) {
-          if (rsi <= 30) bullSignals.push(`RSI ${rsi.toFixed(0)} (oversold)`);
-          else if (rsi >= 70) bearSignals.push(`RSI ${rsi.toFixed(0)} (overbought)`);
+          if (rsi <= 35) bullSignals.push(`RSI ${rsi.toFixed(0)} (oversold)`);
+          else if (rsi >= 65) bearSignals.push(`RSI ${rsi.toFixed(0)} (overbought)`);
         }
 
         // MACD crossover
@@ -343,19 +412,26 @@ async function runMorningBriefing(env: Env): Promise<void> {
         }
 
         // ATR expansion (high volatility = opportunity)
-        if (atr != null && quote.price > 0 && (atr / quote.price) >= 0.035) {
+        if (atr != null && quote.price > 0 && (atr / quote.price) >= 0.03) {
           const sig = `ATR ${((atr / quote.price) * 100).toFixed(1)}% (expanded)`;
           if (bullSignals.length >= bearSignals.length) bullSignals.push(sig);
           else bearSignals.push(sig);
         }
 
-        // Price near SMA 50 support/resistance
+        // Price near SMA 50 support/resistance (relaxed to 3%)
         if (sma50 != null && quote.price > 0) {
           const distPct = ((quote.price - sma50) / sma50) * 100;
-          if (distPct >= -2 && distPct <= 2) {
+          if (distPct >= -3 && distPct <= 3) {
             if (quote.price > sma50) bullSignals.push(`At SMA50 support`);
             else bearSignals.push(`At SMA50 resistance`);
           }
+        }
+
+        // Volume spike (today vs. avg)
+        if (quote.avgVolume > 0 && (quote.volume / quote.avgVolume) >= 1.8) {
+          const vr = (quote.volume / quote.avgVolume).toFixed(1);
+          if (quote.changePercent >= 0) bullSignals.push(`Vol spike ${vr}x avg`);
+          else bearSignals.push(`Vol spike ${vr}x avg`);
         }
 
         const isBullish = bullSignals.length >= bearSignals.length;
@@ -496,6 +572,64 @@ async function runMorningBriefing(env: Env): Promise<void> {
       }
     }
   } catch {}
+
+  // ── SECTION 7: What to Watch Today ──
+  msg3.push(``);
+  msg3.push(`<b>§7  WHAT TO WATCH TODAY</b>`);
+  msg3.push(`───────────────────────────`);
+
+  const watchItems: string[] = [];
+
+  // Earnings to watch
+  if (earningsToday.length > 0) {
+    const notable = earningsToday.slice(0, 4).map((e: any) => {
+      const time = e.hour === 'bmo' ? 'pre' : e.hour === 'amc' ? 'post' : '';
+      return `${e.symbol}${time ? ' (' + time + ')' : ''}`;
+    }).join(', ');
+    watchItems.push(`📅 <b>Earnings:</b> ${notable}`);
+  }
+
+  // Fed / macro events from Google Alerts
+  const fedAlerts = newsAlerts.filter((n: any) => n.category === 'fed-rates');
+  if (fedAlerts.length > 0) {
+    watchItems.push(`🏦 <b>Fed/Macro:</b> ${fedAlerts[0].title.slice(0, 70)}${fedAlerts[0].title.length > 70 ? '...' : ''}`);
+  }
+
+  // Risk flags
+  if (vix && vix.value >= 22) {
+    watchItems.push(`⚡ <b>Risk:</b> VIX elevated at ${vix.value.toFixed(1)} — size down, widen stops`);
+  }
+  if (moversResult.length >= 3) {
+    watchItems.push(`⚠️ <b>Risk:</b> ${moversResult.length} stocks with 10%+ moves — sector contagion possible`);
+  }
+  if (yieldCurve && yieldCurve.inverted) {
+    watchItems.push(`📉 <b>Risk:</b> Inverted yield curve — recession signal active`);
+  }
+
+  // Opportunities
+  if (spx && spx.changePercent < -1.5) {
+    watchItems.push(`🎯 <b>Opportunity:</b> Broad selloff may offer dip-buy entries in quality names`);
+  }
+  if (cryptoBTC && cryptoBTC.changePercent > 4) {
+    watchItems.push(`🎯 <b>Opportunity:</b> BTC momentum — watch for altcoin follow-through`);
+  }
+  const crashAlerts = newsAlerts.filter((n: any) => n.category === 'short-squeeze' || n.category === 'crash-signals');
+  if (crashAlerts.length > 0) {
+    watchItems.push(`🔍 <b>Monitor:</b> ${crashAlerts[0].title.slice(0, 65)}${crashAlerts[0].title.length > 65 ? '...' : ''}`);
+  }
+
+  // Key headline from market news
+  if (marketNews.length > 0) {
+    watchItems.push(`📰 <b>Top Story:</b> ${marketNews[0].headline.slice(0, 70)}${marketNews[0].headline.length > 70 ? '...' : ''}`);
+  }
+
+  if (watchItems.length === 0) {
+    watchItems.push(`No major catalysts on the calendar. Standard risk management applies.`);
+  }
+
+  for (const item of watchItems.slice(0, 5)) {
+    msg3.push(item);
+  }
 
   // ── Footer ──
   msg3.push(``);
