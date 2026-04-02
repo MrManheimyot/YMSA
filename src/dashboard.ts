@@ -290,10 +290,12 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
 .empty{color:var(--c-on-surface-2);font-size:12px;padding:16px;text-align:center;font-style:italic}
 
 /* ═══ WIN/LOSS TABLE ═══ */
-.wl-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.wl-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
 .wl-filter-btn{padding:5px 14px;border-radius:16px;font-size:11px;font-weight:500;border:1px solid var(--c-outline);background:transparent;color:var(--c-on-surface-2);cursor:pointer;transition:all .2s}
 .wl-filter-btn.active{background:var(--c-primary-ctr);color:var(--c-primary);border-color:var(--c-primary)}
 .wl-filter-btn:hover{border-color:var(--c-primary);color:var(--c-primary)}
+.wl-search{margin-left:auto;padding:5px 12px;border-radius:16px;font-size:11px;border:1px solid var(--c-outline);background:var(--c-surface-2);color:var(--c-on-surface);outline:none;width:140px;transition:border-color .2s}
+.wl-search:focus{border-color:var(--c-primary);width:180px}
 .wl-row{cursor:pointer;transition:background .15s}
 .wl-row:hover td{background:rgba(128,203,196,.08)!important}
 .wl-outcome{padding:2px 10px;border-radius:12px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px}
@@ -302,8 +304,7 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
 .wl-outcome.PENDING{background:rgba(128,203,196,.15);color:var(--c-primary)}
 .wl-outcome.BREAKEVEN{background:rgba(176,190,197,.15);color:var(--c-secondary)}
 .wl-outcome.EXPIRED{background:rgba(176,190,197,.1);color:var(--c-on-surface-2)}
-.wl-stats-row{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:16px}
-@media(max-width:900px){.wl-stats-row{grid-template-columns:repeat(3,1fr)}}
+.wl-stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px;margin-bottom:16px}
 .wl-stat{background:var(--c-surface-2);border-radius:var(--radius-s);padding:12px;text-align:center}
 .wl-stat .label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--c-on-surface-2);margin-bottom:4px}
 .wl-stat .val{font-family:'Roboto Mono',monospace;font-size:18px;font-weight:700}
@@ -314,6 +315,33 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
 .wl-action-btn.loss{background:rgba(248,81,73,.2);color:var(--c-sell)}
 .wl-action-btn.be{background:rgba(176,190,197,.2);color:var(--c-secondary)}
 .wl-action-btn.exp{background:rgba(176,190,197,.15);color:var(--c-on-surface-2)}
+/* Sort */
+.tbl th.sortable{cursor:pointer;user-select:none;position:relative;padding-right:14px}
+.tbl th.sortable:hover{color:var(--c-primary)}
+.tbl th.sortable::after{content:'⇅';position:absolute;right:2px;top:50%;transform:translateY(-50%);font-size:9px;opacity:.4}
+.tbl th.sortable.asc::after{content:'↑';opacity:1;color:var(--c-primary)}
+.tbl th.sortable.desc::after{content:'↓';opacity:1;color:var(--c-primary)}
+/* Confidence bar */
+.conf-bar{display:inline-flex;align-items:center;gap:4px}
+.conf-fill{height:6px;border-radius:3px;min-width:4px}
+/* R:R pill */
+.rr-pill{padding:1px 6px;border-radius:8px;font-size:9px;font-weight:600;letter-spacing:.3px}
+.rr-good{background:rgba(63,185,80,.12);color:var(--c-buy)}
+.rr-ok{background:rgba(128,203,196,.12);color:var(--c-primary)}
+.rr-bad{background:rgba(248,81,73,.12);color:var(--c-sell)}
+/* Engine accuracy cards */
+.engine-acc-row{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 16px}
+.engine-acc-card{flex:1;min-width:130px;background:var(--c-surface-2);border-radius:var(--radius-s);padding:10px 12px;position:relative;overflow:hidden}
+.engine-acc-card .eng-name{font-size:11px;font-weight:700;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.engine-acc-card .eng-stats{display:flex;gap:12px;font-size:10px;color:var(--c-on-surface-2)}
+.engine-acc-card .eng-stats span{font-family:'Roboto Mono',monospace}
+.engine-acc-bar{height:3px;border-radius:2px;background:var(--c-outline);margin-top:6px}
+.engine-acc-fill{height:100%;border-radius:2px;transition:width .4s ease}
+/* Age badge */
+.age-badge{padding:1px 6px;border-radius:8px;font-size:9px;font-weight:500;background:var(--c-surface-2);color:var(--c-on-surface-2)}
+.age-badge.fresh{background:rgba(128,203,196,.12);color:var(--c-primary)}
+.age-badge.aging{background:rgba(255,193,7,.12);color:#ffc107}
+.age-badge.old{background:rgba(248,81,73,.12);color:var(--c-sell)}
 
 /* ═══ MODAL ═══ */
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);z-index:1000;display:none;align-items:center;justify-content:center;padding:20px}
@@ -560,7 +588,7 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
   <!-- v3.1: WIN/LOSS TELEGRAM ALERTS TABLE                    -->
   <!-- ═══════════════════════════════════════════════════════ -->
   <div class="section" id="wl-section">
-    <div class="section-hdr">🏆 Win/Loss — Telegram Alert Tracker</div>
+    <div class="section-hdr">🏆 Recommendation Tracker — Intelligence P&L</div>
     <div class="card">
       <!-- Stats Row -->
       <div class="wl-stats-row" id="wl-stats-row">
@@ -570,8 +598,13 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
         <div class="wl-stat"><div class="label">Win Rate</div><div class="val" id="wl-winrate">—</div></div>
         <div class="wl-stat"><div class="label">Total P&L</div><div class="val" id="wl-pnl">—</div></div>
         <div class="wl-stat"><div class="label">Profit Factor</div><div class="val" id="wl-pf">—</div></div>
+        <div class="wl-stat"><div class="label">Avg Win</div><div class="val up" id="wl-avgwin">—</div></div>
+        <div class="wl-stat"><div class="label">Avg Loss</div><div class="val down" id="wl-avgloss">—</div></div>
+        <div class="wl-stat"><div class="label">Expectancy</div><div class="val" id="wl-expect">—</div></div>
       </div>
-      <!-- Filters -->
+      <!-- Engine Accuracy -->
+      <div id="wl-engine-acc" class="engine-acc-row"></div>
+      <!-- Filters + Search -->
       <div class="wl-filters">
         <button class="wl-filter-btn active" onclick="filterWLAlerts('ALL')">All</button>
         <button class="wl-filter-btn" onclick="filterWLAlerts('PENDING')">⏳ Pending</button>
@@ -579,14 +612,24 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
         <button class="wl-filter-btn" onclick="filterWLAlerts('LOSS')">❌ Losses</button>
         <button class="wl-filter-btn" onclick="filterWLAlerts('BREAKEVEN')">➖ Breakeven</button>
         <button class="wl-filter-btn" onclick="filterWLAlerts('EXPIRED')">⏰ Expired</button>
+        <input class="wl-search" type="text" placeholder="🔍 Search symbol..." id="wl-search" oninput="applyWLFilters()">
       </div>
       <!-- Table -->
       <div style="overflow-x:auto">
-        <table class="tbl">
+        <table class="tbl" id="wl-table">
           <thead><tr>
-            <th>Date</th><th>Symbol</th><th>Action</th><th>Engine</th><th>Entry</th><th>SL</th><th>TP1</th><th>Conf</th><th>Outcome</th><th>P&L</th>
+            <th class="sortable" data-sort="sent_at" onclick="sortWLTable(this)">Date</th>
+            <th class="sortable" data-sort="symbol" onclick="sortWLTable(this)">Symbol</th>
+            <th>Action</th>
+            <th class="sortable" data-sort="engine_id" onclick="sortWLTable(this)">Engine</th>
+            <th>Entry</th><th>SL</th><th>TP1</th>
+            <th>R:R</th>
+            <th class="sortable" data-sort="confidence" onclick="sortWLTable(this)">Conf</th>
+            <th class="sortable" data-sort="age" onclick="sortWLTable(this)">Age</th>
+            <th>Outcome</th>
+            <th class="sortable" data-sort="outcome_pnl_pct" onclick="sortWLTable(this)">P&L</th>
           </tr></thead>
-          <tbody id="wl-body"><tr><td colspan="10" class="loading">Loading alerts...</td></tr></tbody>
+          <tbody id="wl-body"><tr><td colspan="12" class="loading">Loading alerts...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -1084,9 +1127,34 @@ async function runTest(path, targetId) {
 
 let allTgAlerts = [];
 let currentWLFilter = 'ALL';
+let wlSortKey = 'sent_at';
+let wlSortDir = 'desc';
+let wlSearchQuery = '';
+
+const ENGINE_NAMES = {
+  'smart-money': 'SMC', 'fibonacci': 'FIB', 'stock-screener': 'SCR',
+  'multi-timeframe': 'MTF', 'pairs-trading': 'PAIR', 'regime': 'REG',
+  'crypto-dex': 'DEX', 'commodity': 'CMD', 'momentum': 'MOM',
+};
+
+function shortEngine(engineId) {
+  if (!engineId) return '—';
+  return engineId.split('+').map(e => ENGINE_NAMES[e] || e.slice(0,4).toUpperCase()).join('+');
+}
+
+function calcRR(a) {
+  if (!a.entry_price || a.entry_price === 0 || !a.stop_loss || !a.take_profit_1) return null;
+  const risk = Math.abs(a.entry_price - a.stop_loss);
+  const reward = Math.abs(a.take_profit_1 - a.entry_price);
+  return risk > 0 ? reward / risk : null;
+}
+
+function ageDays(sentAt) {
+  return Math.floor((Date.now() - sentAt) / (24*60*60*1000));
+}
 
 function renderWinLossTable(data, stats) {
-  allTgAlerts = data?.alerts || [];
+  allTgAlerts = Array.isArray(data) ? data : data?.alerts || [];
   // Stats
   if (stats) {
     $('wl-total').textContent = stats.total || '0';
@@ -1098,40 +1166,105 @@ function renderWinLossTable(data, stats) {
     $('wl-pnl').className = 'val ' + pnlClass(stats.totalPnl);
     $('wl-pf').textContent = stats.profitFactor === Infinity ? '∞' : fmt(stats.profitFactor, 2);
     $('wl-pf').className = 'val ' + (stats.profitFactor >= 1.5 ? 'up' : stats.profitFactor < 1 ? 'down' : '');
+    // New stats
+    $('wl-avgwin').textContent = stats.avgWinPnl ? fmtUsd(stats.avgWinPnl) : '—';
+    $('wl-avgloss').textContent = stats.avgLossPnl ? '-' + fmtUsd(stats.avgLossPnl) : '—';
+    $('wl-expect').textContent = stats.expectancy ? fmtUsd(stats.expectancy) : '—';
+    $('wl-expect').className = 'val ' + pnlClass(stats.expectancy || 0);
+
+    // Engine accuracy cards
+    renderEngineAccuracy(stats.byEngine || []);
   }
-  renderWLRows(allTgAlerts);
+  applyWLFilters();
+}
+
+function renderEngineAccuracy(engines) {
+  const el = $('wl-engine-acc');
+  if (!engines.length) { el.innerHTML = ''; return; }
+  el.innerHTML = engines.map(e => {
+    const wrPct = fmt(e.winRate * 100, 0);
+    const barColor = e.winRate >= 0.6 ? 'var(--c-buy)' : e.winRate >= 0.4 ? 'var(--c-primary)' : 'var(--c-sell)';
+    return \`<div class="engine-acc-card">
+      <div class="eng-name">\${shortEngine(e.engine)}</div>
+      <div class="eng-stats">
+        <span>\${e.total} alerts</span>
+        <span style="color:\${barColor}">\${wrPct}% WR</span>
+        <span class="\${pnlClass(e.pnl)}">\${fmtUsd(e.pnl)}</span>
+      </div>
+      <div class="engine-acc-bar"><div class="engine-acc-fill" style="width:\${wrPct}%;background:\${barColor}"></div></div>
+    </div>\`;
+  }).join('');
+}
+
+function applyWLFilters() {
+  let filtered = currentWLFilter === 'ALL' ? [...allTgAlerts] : allTgAlerts.filter(a => a.outcome === currentWLFilter);
+  // Search
+  wlSearchQuery = ($('wl-search')?.value || '').trim().toUpperCase();
+  if (wlSearchQuery) {
+    filtered = filtered.filter(a => a.symbol.toUpperCase().includes(wlSearchQuery) || (a.engine_id || '').toUpperCase().includes(wlSearchQuery));
+  }
+  // Sort
+  filtered.sort((a, b) => {
+    let va, vb;
+    if (wlSortKey === 'age') { va = a.sent_at; vb = b.sent_at; }
+    else if (wlSortKey === 'confidence') { va = a.confidence || 0; vb = b.confidence || 0; }
+    else if (wlSortKey === 'outcome_pnl_pct') { va = a.outcome_pnl_pct || 0; vb = b.outcome_pnl_pct || 0; }
+    else if (wlSortKey === 'symbol') { va = a.symbol; vb = b.symbol; }
+    else if (wlSortKey === 'engine_id') { va = a.engine_id; vb = b.engine_id; }
+    else { va = a.sent_at; vb = b.sent_at; }
+    if (typeof va === 'string') return wlSortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+    return wlSortDir === 'asc' ? va - vb : vb - va;
+  });
+  renderWLRows(filtered);
+}
+
+function sortWLTable(th) {
+  const key = th.dataset.sort;
+  if (wlSortKey === key) { wlSortDir = wlSortDir === 'asc' ? 'desc' : 'asc'; }
+  else { wlSortKey = key; wlSortDir = 'desc'; }
+  document.querySelectorAll('#wl-table th.sortable').forEach(h => h.classList.remove('asc','desc'));
+  th.classList.add(wlSortDir);
+  applyWLFilters();
 }
 
 function filterWLAlerts(filter) {
   currentWLFilter = filter;
-  // Update button states
   document.querySelectorAll('.wl-filter-btn').forEach(b => b.classList.remove('active'));
   event.target.classList.add('active');
-  const filtered = filter === 'ALL' ? allTgAlerts : allTgAlerts.filter(a => a.outcome === filter);
-  renderWLRows(filtered);
+  applyWLFilters();
 }
 
 function renderWLRows(alerts) {
   const body = $('wl-body');
   if (!alerts.length) {
-    body.innerHTML = '<tr><td colspan="10" class="empty">No alerts ' + (currentWLFilter !== 'ALL' ? 'with status ' + currentWLFilter : 'recorded yet') + '</td></tr>';
+    body.innerHTML = '<tr><td colspan="12" class="empty">No alerts ' + (currentWLFilter !== 'ALL' ? 'with status ' + currentWLFilter : 'recorded yet') + '</td></tr>';
     return;
   }
   body.innerHTML = alerts.map(a => {
     const pnl = a.outcome_pnl;
+    const pnlPct = a.outcome_pnl_pct;
     const pnlColor = pnl > 0 ? 'var(--c-buy)' : pnl < 0 ? 'var(--c-sell)' : 'var(--c-on-surface-2)';
     const actionColor = a.action === 'BUY' ? 'var(--c-buy)' : 'var(--c-sell)';
+    const rr = calcRR(a);
+    const rrClass = rr >= 2 ? 'rr-good' : rr >= 1 ? 'rr-ok' : 'rr-bad';
+    const conf = a.confidence || 0;
+    const confColor = conf >= 80 ? 'var(--c-buy)' : conf >= 65 ? 'var(--c-primary)' : conf >= 50 ? '#ffc107' : 'var(--c-sell)';
+    const age = ageDays(a.sent_at);
+    const ageClass = age <= 1 ? 'fresh' : age <= 4 ? 'aging' : 'old';
+    const pnlDisplay = pnl != null ? fmtUsd(pnl) + (pnlPct != null ? ' <span style="opacity:.6;font-size:9px">(' + (pnlPct >= 0 ? '+' : '') + fmt(pnlPct,1) + '%)</span>' : '') : '—';
     return \`<tr class="wl-row" onclick="openAlertModal('\${a.id}')">
       <td class="mono" style="font-size:10px">\${ts(a.sent_at)}</td>
       <td class="mono" style="font-weight:600">\${a.symbol}</td>
       <td style="color:\${actionColor};font-weight:600">\${a.action}</td>
-      <td class="mono" style="font-size:10px">\${a.engine_id}</td>
-      <td class="mono">\${fmtUsd(a.entry_price)}</td>
+      <td class="mono" style="font-size:10px" title="\${a.engine_id}">\${shortEngine(a.engine_id)}</td>
+      <td class="mono">\${a.entry_price > 0 ? fmtUsd(a.entry_price) : '<span style="color:var(--c-sell)">N/A</span>'}</td>
       <td class="mono">\${a.stop_loss ? fmtUsd(a.stop_loss) : '—'}</td>
       <td class="mono">\${a.take_profit_1 ? fmtUsd(a.take_profit_1) : '—'}</td>
-      <td class="mono">\${a.confidence}/100</td>
+      <td>\${rr != null ? '<span class="rr-pill ' + rrClass + '">' + fmt(rr,1) + ':1</span>' : '—'}</td>
+      <td><div class="conf-bar"><div class="conf-fill" style="width:\${conf/2}px;background:\${confColor}"></div><span class="mono" style="font-size:10px">\${conf}</span></div></td>
+      <td><span class="age-badge \${ageClass}">\${age}d</span></td>
       <td><span class="wl-outcome \${a.outcome}">\${a.outcome}</span></td>
-      <td class="mono" style="color:\${pnlColor}">\${pnl != null ? fmtUsd(pnl) : '—'}</td>
+      <td class="mono" style="color:\${pnlColor}">\${pnlDisplay}</td>
     </tr>\`;
   }).join('');
 }
@@ -1158,19 +1291,32 @@ async function openAlertModal(id) {
   let metadata = {};
   try { metadata = JSON.parse(alert.metadata || '{}'); } catch {}
 
+  const rr = calcRR(alert);
+  const age = ageDays(alert.sent_at);
+  const risk = alert.entry_price && alert.stop_loss ? Math.abs(alert.entry_price - alert.stop_loss) : null;
+  const reward = alert.entry_price && alert.take_profit_1 ? Math.abs(alert.take_profit_1 - alert.entry_price) : null;
+
+  // Structured metadata rendering
+  const metaEngines = metadata.engines || [];
+  const metaReasons = metadata.reasons || [];
+  const metaSignals = metadata.signals || [];
+  const hasStructuredMeta = metaEngines.length || metaReasons.length || metaSignals.length;
+
   $('modal-body').innerHTML = \`
     <div class="modal-section">
       <div class="modal-section-title">📋 Trade Setup</div>
       <div class="modal-kv">
         <span class="k">Symbol</span><span class="v" style="font-weight:700">\${alert.symbol}</span>
         <span class="k">Action</span><span class="v" style="color:\${actionColor}">\${alert.action}</span>
-        <span class="k">Engine</span><span class="v">\${alert.engine_id}</span>
-        <span class="k">Entry Price</span><span class="v">\${fmtUsd(alert.entry_price)}</span>
-        <span class="k">Stop Loss</span><span class="v">\${alert.stop_loss ? fmtUsd(alert.stop_loss) : '—'}</span>
-        <span class="k">Take Profit 1</span><span class="v">\${alert.take_profit_1 ? fmtUsd(alert.take_profit_1) : '—'}</span>
+        <span class="k">Engine(s)</span><span class="v">\${shortEngine(alert.engine_id)} <span style="opacity:.5;font-size:9px">(\${alert.engine_id})</span></span>
+        <span class="k">Entry Price</span><span class="v">\${alert.entry_price > 0 ? fmtUsd(alert.entry_price) : '<span style="color:var(--c-sell)">Missing</span>'}</span>
+        <span class="k">Stop Loss</span><span class="v">\${alert.stop_loss ? fmtUsd(alert.stop_loss) + (risk ? ' <span style="opacity:.5;font-size:9px">(risk: ' + fmtUsd(risk) + ')</span>' : '') : '—'}</span>
+        <span class="k">Take Profit 1</span><span class="v">\${alert.take_profit_1 ? fmtUsd(alert.take_profit_1) + (reward ? ' <span style="opacity:.5;font-size:9px">(reward: ' + fmtUsd(reward) + ')</span>' : '') : '—'}</span>
         <span class="k">Take Profit 2</span><span class="v">\${alert.take_profit_2 ? fmtUsd(alert.take_profit_2) : '—'}</span>
         <span class="k">Confidence</span><span class="v">\${alert.confidence}/100</span>
+        <span class="k">Risk : Reward</span><span class="v">\${rr != null ? fmt(rr,2) + ':1' : '—'}</span>
         <span class="k">Regime</span><span class="v">\${alert.regime || '—'}</span>
+        <span class="k">Age</span><span class="v">\${age} day\${age !== 1 ? 's' : ''}</span>
         <span class="k">Sent At</span><span class="v">\${ts(alert.sent_at)}</span>
       </div>
     </div>
@@ -1206,12 +1352,19 @@ async function openAlertModal(id) {
     </div>
     \` : ''}
 
-    \${metadata && Object.keys(metadata).length > 0 ? \`
+    \${hasStructuredMeta ? \`
+    <div class="modal-section">
+      <div class="modal-section-title">🧠 Signal Intelligence</div>
+      \${metaEngines.length ? '<div style="margin-bottom:8px"><span style="font-size:10px;color:var(--c-on-surface-2);text-transform:uppercase;letter-spacing:.5px">Contributing Engines:</span><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">' + metaEngines.map(e => '<span style="padding:2px 8px;border-radius:10px;font-size:10px;background:var(--c-primary-ctr);color:var(--c-primary)">' + shortEngine(e) + '</span>').join('') + '</div></div>' : ''}
+      \${metaReasons.length ? '<div style="margin-bottom:8px"><span style="font-size:10px;color:var(--c-on-surface-2);text-transform:uppercase;letter-spacing:.5px">Reasons:</span><ul style="margin:4px 0 0 16px;font-size:11px;color:var(--c-on-surface)">' + metaReasons.map(r => '<li>' + String(r).replace(/</g,'&lt;') + '</li>').join('') + '</ul></div>' : ''}
+      \${metaSignals.length ? '<div><span style="font-size:10px;color:var(--c-on-surface-2);text-transform:uppercase;letter-spacing:.5px">Signals:</span><div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">' + metaSignals.map(s => '<span style="padding:2px 8px;border-radius:10px;font-size:10px;background:var(--c-surface-2);color:var(--c-on-surface)">' + String(s).replace(/</g,'&lt;') + '</span>').join('') + '</div></div>' : ''}
+    </div>
+    \` : (metadata && Object.keys(metadata).length > 0 ? \`
     <div class="modal-section">
       <div class="modal-section-title">🔍 Signal Metadata</div>
       <div style="font-family:'Roboto Mono',monospace;font-size:10px;background:var(--c-surface);border-radius:var(--radius-s);padding:10px;max-height:160px;overflow-y:auto;color:var(--c-on-surface-2)">\${JSON.stringify(metadata, null, 2)}</div>
     </div>
-    \` : ''}
+    \` : '')}
 
     <div class="modal-section">
       <div class="modal-section-title">📨 Original Telegram Message</div>

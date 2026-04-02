@@ -434,6 +434,8 @@ export async function getTelegramAlertStats(db: D1Database): Promise<{
   profitFactor: number;
   bestTrade: TelegramAlertRecord | null;
   worstTrade: TelegramAlertRecord | null;
+  expectancy: number;
+  byEngine: Array<{ engine: string; total: number; wins: number; losses: number; winRate: number; avgConf: number; pnl: number }>;
 }> {
   const all = await db.prepare(`SELECT * FROM telegram_alerts ORDER BY sent_at DESC`).all();
   const alerts = (all.results || []) as unknown as TelegramAlertRecord[];
@@ -449,6 +451,36 @@ export async function getTelegramAlertStats(db: D1Database): Promise<{
 
   const sorted = [...resolved].sort((a, b) => (b.outcome_pnl || 0) - (a.outcome_pnl || 0));
 
+  // Per-engine breakdown
+  const engineMap = new Map<string, { total: number; wins: number; losses: number; confSum: number; pnl: number }>();
+  for (const a of alerts) {
+    const engines = a.engine_id.split('+');
+    for (const eng of engines) {
+      const e = engineMap.get(eng) || { total: 0, wins: 0, losses: 0, confSum: 0, pnl: 0 };
+      e.total++;
+      e.confSum += a.confidence || 0;
+      if (a.outcome === 'WIN') e.wins++;
+      if (a.outcome === 'LOSS') e.losses++;
+      e.pnl += a.outcome_pnl || 0;
+      engineMap.set(eng, e);
+    }
+  }
+  const byEngine = [...engineMap.entries()]
+    .map(([engine, e]) => ({
+      engine,
+      total: e.total,
+      wins: e.wins,
+      losses: e.losses,
+      winRate: (e.wins + e.losses) > 0 ? e.wins / (e.wins + e.losses) : 0,
+      avgConf: e.total > 0 ? Math.round(e.confSum / e.total) : 0,
+      pnl: e.pnl,
+    }))
+    .sort((a, b) => b.total - a.total);
+
+  const avgWin = wins.length > 0 ? totalWinPnl / wins.length : 0;
+  const avgLoss = losses.length > 0 ? totalLossPnl / losses.length : 0;
+  const wr = resolved.length > 0 ? wins.length / resolved.length : 0;
+
   return {
     total: alerts.length,
     wins: wins.length,
@@ -456,13 +488,15 @@ export async function getTelegramAlertStats(db: D1Database): Promise<{
     pending: pending.length,
     breakeven: breakeven.length,
     expired: expired.length,
-    winRate: resolved.length > 0 ? wins.length / resolved.length : 0,
-    avgWinPnl: wins.length > 0 ? totalWinPnl / wins.length : 0,
-    avgLossPnl: losses.length > 0 ? totalLossPnl / losses.length : 0,
+    winRate: wr,
+    avgWinPnl: avgWin,
+    avgLossPnl: avgLoss,
     totalPnl: totalWinPnl - totalLossPnl,
     profitFactor: totalLossPnl > 0 ? totalWinPnl / totalLossPnl : totalWinPnl > 0 ? Infinity : 0,
     bestTrade: sorted[0] || null,
     worstTrade: sorted[sorted.length - 1] || null,
+    expectancy: resolved.length > 0 ? (wr * avgWin) - ((1 - wr) * avgLoss) : 0,
+    byEngine,
   };
 }
 

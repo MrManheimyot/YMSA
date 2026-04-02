@@ -1685,27 +1685,47 @@ async function runOvernightSetup(env: Env): Promise<void> {
           const entry = alert.entry_price;
           const sl = alert.stop_loss;
           const tp1 = alert.take_profit_1;
+          const tp2 = alert.take_profit_2;
           const isBuy = alert.action === 'BUY';
+
+          // Skip if entry_price is 0 or missing — can't calculate P&L
+          if (!entry || entry <= 0) {
+            // Auto-expire bad-data alerts after 5 days
+            if ((Date.now() - alert.sent_at) > 5 * 24 * 60 * 60 * 1000) {
+              await updateTelegramAlertOutcome(env.DB, alert.id, 'EXPIRED', currentPrice, null, null, 'Auto-expired: missing entry price');
+              resolved++;
+            }
+            continue;
+          }
 
           // Check stop loss hit
           if (sl && ((isBuy && currentPrice <= sl) || (!isBuy && currentPrice >= sl))) {
             const pnl = isBuy ? (currentPrice - entry) : (entry - currentPrice);
             const pnlPct = (pnl / entry) * 100;
-            await updateTelegramAlertOutcome(env.DB, alert.id, 'LOSS', currentPrice, pnl, pnlPct, 'Auto-resolved: stop loss hit');
+            await updateTelegramAlertOutcome(env.DB, alert.id, 'LOSS', currentPrice, pnl, pnlPct, `Auto-resolved: SL hit at ${currentPrice.toFixed(2)}`);
             resolved++;
             continue;
           }
 
-          // Check TP1 hit (conservative — resolve at TP1)
+          // Check TP2 hit first (bigger win)
+          if (tp2 && ((isBuy && currentPrice >= tp2) || (!isBuy && currentPrice <= tp2))) {
+            const pnl = isBuy ? (currentPrice - entry) : (entry - currentPrice);
+            const pnlPct = (pnl / entry) * 100;
+            await updateTelegramAlertOutcome(env.DB, alert.id, 'WIN', currentPrice, pnl, pnlPct, `Auto-resolved: TP2 reached at ${currentPrice.toFixed(2)}`);
+            resolved++;
+            continue;
+          }
+
+          // Check TP1 hit
           if (tp1 && ((isBuy && currentPrice >= tp1) || (!isBuy && currentPrice <= tp1))) {
             const pnl = isBuy ? (currentPrice - entry) : (entry - currentPrice);
             const pnlPct = (pnl / entry) * 100;
-            await updateTelegramAlertOutcome(env.DB, alert.id, 'WIN', currentPrice, pnl, pnlPct, 'Auto-resolved: TP1 reached');
+            await updateTelegramAlertOutcome(env.DB, alert.id, 'WIN', currentPrice, pnl, pnlPct, `Auto-resolved: TP1 reached at ${currentPrice.toFixed(2)}`);
             resolved++;
             continue;
           }
 
-          // Breakeven: price moved past entry but came back within 0.5%
+          // Breakeven: price within 0.5% of entry AND >3 days old
           const moveFromEntry = isBuy ? (currentPrice - entry) / entry : (entry - currentPrice) / entry;
           if (Math.abs(moveFromEntry) < 0.005 && (Date.now() - alert.sent_at) > 3 * 24 * 60 * 60 * 1000) {
             await updateTelegramAlertOutcome(env.DB, alert.id, 'BREAKEVEN', currentPrice, 0, 0, 'Auto-resolved: price stagnant after 3 days');
