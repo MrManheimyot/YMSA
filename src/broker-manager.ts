@@ -603,6 +603,41 @@ export async function flushCycle(env: Env): Promise<number> {
   // 1. Merge engine outputs per symbol → trade alerts
   const trades = mergeBySymbol(cycleOutputs);
 
+  // 1b. Log ALL qualifying merged trades to D1 for win/loss tracking
+  //     This ensures every recommendation appears in the P&L table,
+  //     even if Telegram delivery is throttled by the alert budget.
+  const loggedTradeIds = new Map<string, string>(); // symbol:dir → tga id
+  if (env.DB && trades.length > 0) {
+    for (const t of trades) {
+      if (t.confidence < 55) continue;
+      if (t.conflicting && t.confidence < 70) continue;
+      const key = `${t.symbol}:${t.direction}`;
+      if (wasSentRecently(key)) continue; // skip deduped trades
+      try {
+        const tgaId = generateId('tga');
+        await insertTelegramAlert(env.DB, {
+          id: tgaId,
+          symbol: t.symbol,
+          action: t.direction as 'BUY' | 'SELL',
+          engine_id: t.engines.join('+'),
+          entry_price: t.entry,
+          stop_loss: t.stopLoss,
+          take_profit_1: t.tp1,
+          take_profit_2: t.tp2,
+          confidence: t.confidence,
+          alert_text: '', // placeholder — updated when Telegram message is composed
+          regime: cycleRegime?.regime || null,
+          metadata: JSON.stringify({ engines: t.engines, reasons: t.reasons, signals: t.signals }),
+          sent_at: Date.now(),
+        });
+        loggedTradeIds.set(key, tgaId);
+        markSent(key); // prevent duplicate D1 inserts across multiple flushCycle calls
+      } catch (err) {
+        console.error(`[Broker] Alert D1 insert failed for ${t.symbol}:`, err);
+      }
+    }
+  }
+
   // Z.AI Batch Compose: If 2+ high-confidence trades, try a composed batch alert
   if (trades.length >= 2 && isZAiAvailable(env)) {
     try {
@@ -619,11 +654,13 @@ export async function flushCycle(env: Env): Promise<number> {
       }));
       const composed = await composeAlert((env as any).AI, batchInfos, cycleRegime);
       if (composed && composed.length > 20) {
-        messages.push({
+        const batchMsg: MessagePlan & { _batchTrades?: MergedTrade[] } = {
           priority: trades[0].confidence >= 80 ? 'HIGH' : 'MEDIUM',
           text: `🧠 <b>Z.AI Multi-Signal Alert</b>\n\n${composed}`,
           silent: false,
-        });
+        };
+        batchMsg._batchTrades = trades.slice(0, 3);
+        messages.push(batchMsg);
         for (const t of trades.slice(0, 3)) {
           markSent(`${t.symbol}:${t.direction}`);
           recordTradeAlert();
@@ -683,32 +720,28 @@ export async function flushCycle(env: Env): Promise<number> {
     return ord[a.priority] - ord[b.priority];
   });
 
+  // 4. Send in priority order
+  messages.sort((a, b) => {
+    const ord = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+    return ord[a.priority] - ord[b.priority];
+  });
+
   let sent = 0;
   for (const msg of messages) {
     try {
       await sendTelegramMessageEx(msg.text, env, msg.silent);
       sent++;
-      // Log trade alerts to D1 for win/loss tracking
+      // Update alert_text for trades already logged to D1
       const trade = (msg as any)._trade as MergedTrade | undefined;
-      if (trade && env.DB) {
-        try {
-          await insertTelegramAlert(env.DB, {
-            id: generateId('tga'),
-            symbol: trade.symbol,
-            action: trade.direction as 'BUY' | 'SELL',
-            engine_id: trade.engines.join('+'),
-            entry_price: trade.entry,
-            stop_loss: trade.stopLoss,
-            take_profit_1: trade.tp1,
-            take_profit_2: trade.tp2,
-            confidence: trade.confidence,
-            alert_text: msg.text,
-            regime: cycleRegime?.regime || null,
-            metadata: JSON.stringify({ engines: trade.engines, reasons: trade.reasons, signals: trade.signals }),
-            sent_at: Date.now(),
-          });
-        } catch (logErr) {
-          console.error('[Broker] Alert D1 log failed:', logErr);
+      const batchTrades = (msg as any)._batchTrades as MergedTrade[] | undefined;
+      const tradesToUpdate = trade ? [trade] : batchTrades ? batchTrades : [];
+      for (const t of tradesToUpdate) {
+        const key = `${t.symbol}:${t.direction}`;
+        const tgaId = loggedTradeIds.get(key);
+        if (tgaId && env.DB) {
+          try {
+            await env.DB.prepare(`UPDATE telegram_alerts SET alert_text = ? WHERE id = ?`).bind(msg.text, tgaId).run();
+          } catch {}
         }
       }
     } catch (err) {
