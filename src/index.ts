@@ -488,12 +488,34 @@ export default {
 
       // ─── Batch Dashboard Data (reduces API calls) ──
       if (path === '/api/dashboard-data') {
-        const [tgAlerts, tgStats, pnlDash] = await Promise.all([
+        const [tgAlerts, tgStats, pnlDash, rawTrades] = await Promise.all([
           getRecentTelegramAlerts(env.DB!, 100),
           getTelegramAlertStats(env.DB!),
           getPnlDashboardData(env.DB!),
+          getRecentTrades(env.DB!, 200),
         ]);
-        return jsonResponse({ tgAlerts, tgStats, pnlDash }, 200, corsHeaders);
+
+        // Enrich open trades with live unrealized P&L
+        const openTrades = rawTrades.filter(t => t.status === 'OPEN');
+        const openSymbols = [...new Set(openTrades.map(t => t.symbol))];
+        let priceMap = new Map<string, number>();
+        if (openSymbols.length > 0) {
+          try {
+            const quotes = await yahooFinance.getMultipleQuotes(openSymbols);
+            priceMap = new Map(quotes.map(q => [q.symbol, q.price]));
+          } catch {}
+        }
+        const simTrades = rawTrades.map(t => {
+          if (t.status !== 'OPEN') return t;
+          const price = priceMap.get(t.symbol);
+          if (!price) return t;
+          const isBuy = t.side === 'BUY';
+          const unrealizedPnl = isBuy ? (price - t.entry_price) * t.qty : (t.entry_price - price) * t.qty;
+          const unrealizedPnlPct = t.entry_price > 0 ? ((price - t.entry_price) / t.entry_price) * 100 * (isBuy ? 1 : -1) : 0;
+          return { ...t, pnl: unrealizedPnl, pnl_pct: unrealizedPnlPct, current_price: price };
+        });
+
+        return jsonResponse({ tgAlerts, tgStats, pnlDash, simTrades }, 200, corsHeaders);
       }
 
       // ─── 404 ───────────────────────────────────────

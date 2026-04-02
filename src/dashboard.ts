@@ -656,6 +656,7 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
       <button class="tab-btn" onclick="switchPnlTab('monthly', this)">📅 Monthly Returns</button>
       <button class="tab-btn" onclick="switchPnlTab('daily', this)">📊 Daily P&L</button>
       <button class="tab-btn" onclick="switchPnlTab('breakdown', this)">🔍 Breakdown</button>
+      <button class="tab-btn" onclick="switchPnlTab('simtrades', this)">📋 Trades</button>
     </div>
 
     <!-- Tab: Equity Curve -->
@@ -707,6 +708,28 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
             <tbody id="pnl-symbol-body"><tr><td colspan="4" class="loading">Loading...</td></tr></tbody>
           </table>
         </div>
+      </div>
+    </div>
+
+    <!-- Tab: Simulated Trades Detail -->
+    <div class="tab-content" id="tab-simtrades">
+      <div class="card" style="padding:0;overflow-x:auto">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.06)">
+          <div class="card-title" style="margin:0">Simulated Trades</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap" id="sim-trade-filters">
+            <button class="chip active" onclick="filterSimTrades('all',this)">All</button>
+            <button class="chip" onclick="filterSimTrades('OPEN',this)">🟢 Open</button>
+            <button class="chip" onclick="filterSimTrades('CLOSED',this)">⚪ Closed</button>
+          </div>
+        </div>
+        <table class="tbl" id="sim-trades-table">
+          <thead><tr>
+            <th>Date</th><th>Symbol</th><th>Side</th><th>Engine</th><th>Qty</th>
+            <th>Entry</th><th>SL</th><th>TP</th><th>Exit / Current</th>
+            <th>P&L $</th><th>P&L %</th><th>Status</th><th>Age</th>
+          </tr></thead>
+          <tbody id="sim-trades-body"><tr><td colspan="13" class="loading">Loading...</td></tr></tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -770,6 +793,7 @@ async function loadDashboard() {
   renderSparkline(dailyPnl);
   renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats);
   renderPnlDashboard(dashData?.pnlDash);
+  renderSimTrades(dashData?.simTrades);
   $('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
 
@@ -1515,6 +1539,94 @@ function renderBreakdownTable(bodyId, data, nameKey) {
       <td class="mono">\${row.count}</td>
       <td class="mono" style="color:\${(row.win_rate||0) > 0.5 ? 'var(--c-buy)' : 'var(--c-sell)'}">\${wr}</td>
       <td class="mono" style="color:\${pnl >= 0 ? 'var(--c-buy)' : 'var(--c-sell)'}">\${fmtUsd(pnl)}</td>
+    </tr>\`;
+  }).join('');
+}
+
+// ── Simulated Trades Table ──
+let _simTradesData = [];
+let _simTradeFilter = 'all';
+
+function renderSimTrades(data) {
+  const trades = data || [];
+  _simTradesData = trades;
+  _renderSimTradesFiltered();
+}
+
+function filterSimTrades(filter, btn) {
+  _simTradeFilter = filter;
+  document.querySelectorAll('#sim-trade-filters .chip').forEach(c => c.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _renderSimTradesFiltered();
+}
+
+function _renderSimTradesFiltered() {
+  const body = $('sim-trades-body');
+  let trades = _simTradesData;
+  if (_simTradeFilter !== 'all') {
+    trades = trades.filter(t => t.status === _simTradeFilter);
+  }
+  if (!trades.length) {
+    body.innerHTML = '<tr><td colspan="13" class="empty">No simulated trades yet</td></tr>';
+    return;
+  }
+  const now = Date.now();
+  body.innerHTML = trades.map(t => {
+    const pnl = t.pnl ?? 0;
+    const pnlPct = t.pnl_pct ?? 0;
+    const isBuy = t.side === 'BUY';
+    const isOpen = t.status === 'OPEN';
+
+    // For open trades, show unrealized P&L (server enriches with live prices)
+    let displayPnl = '—';
+    let displayPnlPct = '—';
+    let pnlColor = 'var(--c-on-surface-2)';
+
+    if (t.pnl != null) {
+      displayPnl = fmtUsd(t.pnl);
+      displayPnlPct = fmtPct(t.pnl_pct);
+      pnlColor = t.pnl >= 0 ? 'var(--c-buy)' : 'var(--c-sell)';
+    }
+
+    // Status badge
+    let statusBadge;
+    if (isOpen && t.pnl != null && t.pnl >= 0) {
+      statusBadge = '<span style="color:var(--c-buy)">🟢 IN PROFIT</span>';
+    } else if (isOpen && t.pnl != null && t.pnl < 0) {
+      statusBadge = '<span style="color:var(--c-sell)">🔴 IN LOSS</span>';
+    } else if (isOpen) {
+      statusBadge = '<span style="color:var(--c-buy)">🟢 OPEN</span>';
+    } else if (t.status === 'CLOSED' && pnl >= 0) {
+      statusBadge = '<span style="color:var(--c-buy)">✅ WIN</span>';
+    } else if (t.status === 'CLOSED' && pnl < 0) {
+      statusBadge = '<span style="color:var(--c-sell)">❌ LOSS</span>';
+    } else {
+      statusBadge = '<span>⚪ ' + t.status + '</span>';
+    }
+
+    // Age
+    const ageMs = (t.closed_at || now) - t.opened_at;
+    const ageDays = Math.floor(ageMs / (24*60*60*1000));
+    const ageHrs = Math.floor((ageMs % (24*60*60*1000)) / (60*60*1000));
+    const ageLabel = ageDays > 0 ? ageDays + 'd ' + ageHrs + 'h' : ageHrs + 'h';
+
+    // Side color
+    const sideColor = isBuy ? 'var(--c-buy)' : 'var(--c-sell)';
+
+    return \`<tr>
+      <td class="mono" style="font-size:11px;white-space:nowrap">\${new Date(t.opened_at).toLocaleDateString()} \${new Date(t.opened_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</td>
+      <td class="mono" style="font-weight:600">\${t.symbol}</td>
+      <td style="color:\${sideColor};font-weight:600">\${t.side}</td>
+      <td class="mono" style="font-size:10px">\${t.engine_id}</td>
+      <td class="mono">\${t.qty}</td>
+      <td class="mono">\${fmtUsd(t.entry_price)}</td>
+      <td class="mono" style="color:var(--c-sell)">\${t.stop_loss ? fmtUsd(t.stop_loss) : '—'}</td>
+      <td class="mono" style="color:var(--c-buy)">\${t.take_profit ? fmtUsd(t.take_profit) : '—'}</td>
+      <td class="mono">\${t.exit_price ? fmtUsd(t.exit_price) : (isOpen && t.current_price ? '<i style="color:var(--c-on-surface-2)">' + fmtUsd(t.current_price) + '</i>' : '—')}</td>
+      <td class="mono" style="color:\${pnlColor};font-weight:500">\${displayPnl}</td>
+      <td class="mono" style="color:\${pnlColor}">\${displayPnlPct}</td>
+      <td style="font-size:11px">\${statusBadge}</td>
+      <td class="mono" style="font-size:11px">\${ageLabel}</td>
     </tr>\`;
   }).join('');
 }
