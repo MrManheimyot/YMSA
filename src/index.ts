@@ -362,20 +362,36 @@ export default {
       // ─── Engine Performance Stats ──────────────────
       if (path === '/api/engine-stats') {
         const latest = await getAllLatestEnginePerformance(env.DB!);
-        // Merge live signal counts from signals table for today
+        // Merge live signal counts + real-time win rates from trades table
         try {
           const todayStart = new Date(new Date().toISOString().split('T')[0]).getTime();
-          const rows = await env.DB!.prepare(
-            `SELECT engine_id, COUNT(*) as cnt FROM signals WHERE created_at >= ? GROUP BY engine_id`
-          ).bind(todayStart).all();
+          const [sigRows, tradeRows] = await Promise.all([
+            env.DB!.prepare(
+              `SELECT engine_id, COUNT(*) as cnt FROM signals WHERE created_at >= ? GROUP BY engine_id`
+            ).bind(todayStart).all(),
+            env.DB!.prepare(
+              `SELECT engine_id, COUNT(*) as total, SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) as wins, SUM(COALESCE(pnl, 0)) as total_pnl FROM trades WHERE status = 'CLOSED' GROUP BY engine_id`
+            ).all(),
+          ]);
           const liveCounts: Record<string, number> = {};
-          for (const r of (rows.results || []) as any[]) {
+          for (const r of (sigRows.results || []) as any[]) {
             liveCounts[r.engine_id] = r.cnt;
+          }
+          const liveTradeStats: Record<string, { wins: number; total: number; pnl: number }> = {};
+          for (const r of (tradeRows.results || []) as any[]) {
+            liveTradeStats[r.engine_id] = { wins: r.wins || 0, total: r.total || 0, pnl: r.total_pnl || 0 };
           }
           for (const eng of latest) {
             if (liveCounts[eng.engine_id] && liveCounts[eng.engine_id] > eng.signals_generated) {
               eng.signals_generated = liveCounts[eng.engine_id];
               eng.date = new Date().toISOString().split('T')[0];
+            }
+            // Override with real-time win rate and P&L from closed trades
+            const ts = liveTradeStats[eng.engine_id];
+            if (ts && ts.total > 0) {
+              eng.win_rate = ts.wins / ts.total;
+              eng.pnl = ts.pnl;
+              eng.trades_executed = ts.total;
             }
           }
         } catch {}

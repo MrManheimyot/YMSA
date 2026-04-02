@@ -21,6 +21,8 @@ export interface PortfolioSnapshot {
   totalUnrealizedPnl: number;
   dailyPnl: number;
   dailyPnlPct: number;
+  lastEquity: number;
+  realizedPnlToday: number;
 }
 
 export interface PositionSummary {
@@ -90,7 +92,22 @@ export async function getPortfolioSnapshot(env: Env): Promise<PortfolioSnapshot 
   }
 
   const equity = parseFloat(account.equity);
+  const lastEquity = parseFloat(account.last_equity || account.equity);
   const totalUnrealizedPnl = positions.reduce((sum, p) => sum + p.unrealizedPnl, 0);
+
+  // True daily P&L: current equity vs. previous close equity (from Alpaca)
+  const dailyPnl = equity - lastEquity;
+  const dailyPnlPct = lastEquity > 0 ? (dailyPnl / lastEquity) * 100 : 0;
+
+  // Realized P&L from trades closed today
+  const today = new Date().toISOString().split('T')[0];
+  const trades = await getRecentTrades(env.DB, 100);
+  const closedToday = trades.filter(t =>
+    t.status === 'CLOSED' &&
+    t.closed_at &&
+    new Date(t.closed_at).toISOString().split('T')[0] === today
+  );
+  const realizedPnlToday = closedToday.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
 
   return {
     equity,
@@ -98,8 +115,10 @@ export async function getPortfolioSnapshot(env: Env): Promise<PortfolioSnapshot 
     buyingPower: parseFloat(account.buying_power),
     positions,
     totalUnrealizedPnl,
-    dailyPnl: totalUnrealizedPnl, // simplified — full impl would track from market open
-    dailyPnlPct: equity > 0 ? (totalUnrealizedPnl / equity) * 100 : 0,
+    dailyPnl,
+    dailyPnlPct,
+    lastEquity,
+    realizedPnlToday,
   };
 }
 
@@ -129,6 +148,7 @@ export async function recordDailyPnl(env: Env): Promise<void> {
   const sharpe = calculateSharpe(returns);
   const maxDD = calculateMaxDrawdown(recent.map(d => d.total_equity));
 
+  // Use real daily P&L from broker (equity vs. last_equity)
   await upsertDailyPnl(env.DB, {
     date: today,
     total_equity: snapshot.equity,

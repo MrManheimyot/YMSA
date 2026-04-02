@@ -850,9 +850,11 @@ function renderPortfolio(p, perf) {
   const dpnl = p.daily_pnl ?? p.dailyPnl ?? 0;
   $('h-daily-pnl').textContent = fmtUsd(dpnl);
   $('h-daily-pnl').className = 'card-value ' + pnlClass(dpnl);
-  $('h-daily-pnl-sub').textContent = fmtPct(p.daily_pnl_pct ?? p.dailyPnlPct) + ' today';
+  const rpnl = p.realizedPnlToday ?? p.realized_pnl_today ?? 0;
+  const dpnlSub = fmtPct(p.daily_pnl_pct ?? p.dailyPnlPct) + ' today';
+  $('h-daily-pnl-sub').textContent = rpnl !== 0 ? dpnlSub + ' (realized: ' + fmtUsd(rpnl) + ')' : dpnlSub;
 
-  const upnl = p.unrealized_pnl ?? p.unrealizedPnl ?? 0;
+  const upnl = p.unrealized_pnl ?? p.unrealizedPnl ?? p.totalUnrealizedPnl ?? 0;
   $('h-unrealized').textContent = fmtUsd(upnl);
   $('h-unrealized').className = 'card-value ' + pnlClass(upnl);
 

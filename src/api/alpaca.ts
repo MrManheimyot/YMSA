@@ -20,6 +20,7 @@ export interface AlpacaAccount {
   cash: string;
   buying_power: string;
   portfolio_value: string;
+  last_equity: string;
   pattern_day_trader: boolean;
   trading_blocked: boolean;
   account_blocked: boolean;
