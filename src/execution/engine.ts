@@ -27,6 +27,10 @@ export interface ExecutionResult {
   tradeId?: string;
   orderId?: string;
   shares?: number;
+  symbol?: string;
+  direction?: 'BUY' | 'SELL';
+  entryPrice?: number;
+  engineId?: string;
   error?: string;
   skipped?: string;         // reason if not executed
 }
@@ -217,6 +221,10 @@ export async function executeSignal(
     tradeId,
     orderId: order.id,
     shares: size.shares,
+    symbol,
+    direction,
+    entryPrice,
+    engineId,
   };
 }
 
@@ -252,17 +260,22 @@ export async function executeBatch(
  * Format batch execution results for Telegram.
  */
 export function formatBatchResults(results: ExecutionResult[]): string {
-  const executed = results.filter(r => r.success).length;
-  const skipped = results.filter(r => r.skipped).length;
-  const failed = results.filter(r => r.error).length;
+  const trades = results.filter(r => r.success);
+  if (trades.length === 0) return '';
 
-  return [
-    `📊 <b>Batch Execution Summary</b>`,
+  const lines = [
+    `📊 <b>DAILY EXECUTION SUMMARY</b>`,
     `━━━━━━━━━━━━━━━━━━━━━━`,
-    `✅ Executed: ${executed}`,
-    `⏭️ Skipped: ${skipped}`,
-    `❌ Failed: ${failed}`,
-  ].join('\n');
+    `✅ Executed: ${trades.length}`,
+    ``,
+  ];
+
+  for (const t of trades) {
+    const emoji = t.direction === 'BUY' ? '🟢' : '🔴';
+    lines.push(`${emoji} <b>${t.symbol}</b> — ${t.direction} ${t.shares} @ $${(t.entryPrice ?? 0).toFixed(2)}`);
+  }
+
+  return lines.join('\n');
 }
 
 // ─── Close Trade with Z.AI Review ────────────────────────────

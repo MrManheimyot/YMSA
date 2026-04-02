@@ -186,10 +186,16 @@ function formatNumber(n: number): string {
 }
 
 /**
- * Detect unusual prediction market activity — potential insider signals.
- * Looks for: high-volume markets with extreme probabilities (>90% or <10%),
- * recently created markets with disproportionate volume,
- * and markets ending soon with high volume (potential information-driven bets).
+ * Detect potential insider-driven positioning on prediction markets.
+ *
+ * Insider-driven criteria (per chief broker):
+ * 1. LOW probability events (≤25%) — high risk/return bets
+ * 2. Event resolves within 2 weeks
+ * 3. Concentrated volume: vol/liquidity ratio ≥5x (proxy for single-user dominance)
+ * 4. Minimum volume threshold: $50K
+ *
+ * Note: Polymarket public API doesn't expose per-user bet data.
+ * We use vol/liquidity ratio ≥5x as a proxy for "one account >50% of volume."
  */
 export async function detectUnusualActivity(limit: number = 50): Promise<{
   market: PredictionMarket;
@@ -202,44 +208,38 @@ export async function detectUnusualActivity(limit: number = 50): Promise<{
   const now = Date.now();
 
   for (const m of markets) {
-    // 1. Extreme probability with high volume — potential insider knowledge
-    const extremeOutcome = m.outcomes.find(o => o.price >= 0.92 || o.price <= 0.08);
-    if (extremeOutcome && m.volume >= 50000) {
-      const pct = (extremeOutcome.price * 100).toFixed(0);
-      unusual.push({
-        market: m,
-        reason: `Extreme probability: ${extremeOutcome.name} at ${pct}% with $${formatNumber(m.volume)} volume`,
-        severity: m.volume >= 200000 ? 'HIGH' : 'MEDIUM',
-      });
-      continue;
-    }
+    if (m.volume < 50000) continue;
 
-    // 2. Event ending soon (<7 days) with disproportionate volume
+    // Only look at LOW probability outcomes (≤25%) — high-risk/high-return bets
+    const lowProbOutcome = m.outcomes.find(o => o.price <= 0.25 && o.price >= 0.01);
+    if (!lowProbOutcome) continue;
+
+    // Event must resolve within 2 weeks
     if (m.endDate) {
       const endMs = new Date(m.endDate).getTime();
       const daysLeft = (endMs - now) / (24 * 60 * 60 * 1000);
-      if (daysLeft > 0 && daysLeft <= 7 && m.volume >= 100000) {
-        unusual.push({
-          market: m,
-          reason: `Ending in ${Math.ceil(daysLeft)}d with $${formatNumber(m.volume)} volume — potential informed positioning`,
-          severity: m.volume >= 500000 ? 'HIGH' : 'MEDIUM',
-        });
-        continue;
-      }
+      if (daysLeft <= 0 || daysLeft > 14) continue;
+    } else {
+      continue; // Skip events with no end date
     }
 
-    // 3. Very high volume-to-liquidity ratio — possible large single bets
-    if (m.liquidity > 0 && m.volume / m.liquidity >= 10 && m.volume >= 50000) {
-      unusual.push({
-        market: m,
-        reason: `Vol/Liq ratio ${(m.volume / m.liquidity).toFixed(0)}x — possible large concentrated bet ($${formatNumber(m.volume)})`,
-        severity: 'HIGH',
-      });
-      continue;
-    }
+    // Concentrated volume proxy: vol/liquidity ratio ≥5x suggests
+    // a small number of large bets dominating the market
+    const volLiqRatio = m.liquidity > 0 ? m.volume / m.liquidity : 0;
+    if (volLiqRatio < 5) continue;
+
+    const pct = (lowProbOutcome.price * 100).toFixed(0);
+    const endMs = new Date(m.endDate).getTime();
+    const daysLeft = Math.ceil((endMs - now) / (24 * 60 * 60 * 1000));
+
+    unusual.push({
+      market: m,
+      reason: `Low-prob bet (${pct}%) resolving in ${daysLeft}d · Vol/Liq ${volLiqRatio.toFixed(0)}x · $${formatNumber(m.volume)} concentrated volume`,
+      severity: volLiqRatio >= 10 ? 'HIGH' : 'MEDIUM',
+    });
   }
 
-  // Sort: HIGH severity first, then by volume
+  // Sort: HIGH severity first, then by vol/liq ratio
   return unusual
     .sort((a, b) => {
       if (a.severity !== b.severity) return a.severity === 'HIGH' ? -1 : 1;

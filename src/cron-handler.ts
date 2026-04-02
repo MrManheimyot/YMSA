@@ -67,6 +67,9 @@ export async function handleCronEvent(
       case 'OVERNIGHT_SETUP':
         await runOvernightSetup(env);
         break;
+      case 'DAILY_SUMMARY':
+        await runDailySummary(env);
+        break;
       case 'AFTER_HOURS_SCAN':
         await runAfterHoursScan(env);
         break;
@@ -94,6 +97,7 @@ function identifyCronJob(cron: string): CronJobType {
   if (cron.startsWith('*/15')) return 'QUICK_SCAN_15MIN';
   if (cron === '0 18 * * 1-5') return 'MIDDAY_REBALANCE';
   if (cron === '0 15 * * 1-5') return 'EVENING_SUMMARY';
+  if (cron === '0 21 * * 1-5') return 'DAILY_SUMMARY';
   if (cron === '30 21 * * 1-5') return 'OVERNIGHT_SETUP';
   if (cron === '0 7 * * SUN' || cron === '0 7 * * 0') return 'WEEKLY_REVIEW';
   if (cron === '0 3 * * SAT' || cron === '0 3 * * 6') return 'ML_RETRAIN';
@@ -128,8 +132,8 @@ async function runMorningBriefing(env: Env): Promise<void> {
     moversResult,
     unusualResult,
     newsAlerts,
-    marketNews,
-    earningsToday,
+    _marketNews,
+    _earningsToday,
   ] = await Promise.all([
     yahooFinance.getMultipleQuotes(['^GSPC', '^IXIC', '^DJI', 'GC=F', 'CL=F', 'AAPL', 'GOOGL', 'NVDA', 'MSFT', 'AMZN']),
     yahooFinance.getQuote('BTC-USD'),
@@ -183,7 +187,7 @@ async function runMorningBriefing(env: Env): Promise<void> {
   for (const q of indexQuotes) {
     const name = idxMap[q.symbol] || q.symbol;
     msg1.push(`${dot(q.changePercent)} <b>${name}</b>`);
-    msg1.push(`    ${fmtPrice(q.price)} ${arrow(q.changePercent)} ${fmtChg(q.changePercent)} (${q.change >= 0 ? '+' : ''}${fmtPrice(q.change)})`);
+    msg1.push(`    ${fmtPrice(q.price)} ${arrow(q.changePercent)} ${fmtChg(q.changePercent)}`);
   }
 
   // Gold
@@ -220,70 +224,13 @@ async function runMorningBriefing(env: Env): Promise<void> {
 
   // ── SECTION 2: Core Holdings ──
   msg1.push(``);
-  msg1.push(`<b>§2  CORE HOLDINGS — Daily Performance</b>`);
+  msg1.push(`<b>§2  CORE HOLDINGS — Last Trading Day</b>`);
   msg1.push(`───────────────────────────`);
 
   for (const q of coreQuotes) {
     const volRatio = q.avgVolume > 0 ? (q.volume / q.avgVolume) : 0;
     const volFlag = volRatio >= 1.5 ? ' 📊' : '';
     msg1.push(`${dot(q.changePercent)} <b>${q.symbol}</b>  $${fmtPrice(q.price)}  ${arrow(q.changePercent)} ${fmtChg(q.changePercent)}${volFlag}`);
-  }
-
-  // ── MARKET INSIGHTS — data-driven commentary ──
-  msg1.push(``);
-  msg1.push(`<b>📌 KEY INSIGHTS</b>`);
-  msg1.push(`───────────────────────────`);
-
-  const spx = quoteOf('^GSPC');
-  const ndx = quoteOf('^IXIC');
-  const insights: string[] = [];
-
-  // Insight 1: Market regime from VIX + indices
-  if (vix && spx) {
-    if (vix.value >= 25) {
-      insights.push(`Fear is elevated — VIX at ${vix.value.toFixed(1)} signals hedging demand. Volatility-adjusted sizing recommended.`);
-    } else if (vix.value <= 14 && spx.changePercent > 0) {
-      insights.push(`Complacency watch — VIX sub-15 with equity drift higher. Low-vol regimes tend to end abruptly.`);
-    } else if (spx.changePercent > 1) {
-      insights.push(`Broad risk-on — S&P up ${fmtChg(spx.changePercent)} with VIX at ${vix.value.toFixed(1)}. Momentum favors longs but watch for mean reversion.`);
-    } else if (spx.changePercent < -1) {
-      insights.push(`Risk-off tone — S&P down ${fmtChg(spx.changePercent)}. Wait for stabilization before adding exposure.`);
-    } else {
-      insights.push(`Markets range-bound — S&P ${fmtChg(spx.changePercent)}, VIX ${vix.value.toFixed(1)}. Selective stock-picking favored over broad bets.`);
-    }
-  }
-
-  // Insight 2: Tech vs. broad market divergence
-  if (spx && ndx) {
-    const divergence = ndx.changePercent - spx.changePercent;
-    if (divergence > 0.8) {
-      insights.push(`Tech outperformance — NASDAQ leading by ${divergence.toFixed(1)}pp. Growth/AI names remain the preferred vehicle.`);
-    } else if (divergence < -0.8) {
-      insights.push(`Rotation out of tech — NASDAQ lagging by ${Math.abs(divergence).toFixed(1)}pp. Value and cyclicals attracting flows.`);
-    }
-  }
-
-  // Insight 3: Yield curve / macro
-  if (yieldCurve && yieldCurve.inverted) {
-    insights.push(`Yield curve inverted at ${yieldCurve.spread.toFixed(2)}% — historically a recession precursor. Defensive positioning warranted.`);
-  } else if (gold && gold.changePercent > 1.5) {
-    insights.push(`Gold surging ${fmtChg(gold.changePercent)} — safe-haven demand rising. Monitor for geopolitical escalation or dollar weakness.`);
-  } else if (cryptoBTC && cryptoBTC.changePercent > 3) {
-    insights.push(`Bitcoin up ${fmtChg(cryptoBTC.changePercent)} — risk appetite extends to digital assets. Institutional flows may be accelerating.`);
-  } else if (oil && Math.abs(oil.changePercent) > 2) {
-    insights.push(`Oil ${oil.changePercent > 0 ? 'spiking' : 'sliding'} ${fmtChg(oil.changePercent)} — energy sector ${oil.changePercent > 0 ? 'catching a bid' : 'under pressure'}. Watch for inflation implications.`);
-  }
-
-  // Ensure at least 2 insights
-  if (insights.length < 2 && moversResult.length > 0) {
-    insights.push(`${moversResult.length} unusual movers detected — elevated single-stock volatility signals active catalysts in play.`);
-  }
-  if (insights.length < 2) {
-    insights.push(`Quiet tape — no major dislocations. Focus on technical setups with defined risk.`);
-  }
-
-  for (const insight of insights.slice(0, 3)) {
-    msg1.push(`• ${insight}`);
   }
 
   await sendDailyBriefing(msg1.join('\n'), env);
@@ -478,9 +425,9 @@ async function runMorningBriefing(env: Env): Promise<void> {
   const msg3: string[] = [];
 
   // ── SECTION 5: Prediction Markets — Unusual Activity Only ──
-  msg3.push(`<b>§5  PREDICTION MARKETS — Unusual Activity Scan</b>`);
+  msg3.push(`<b>§5  PREDICTION MARKETS — Insider-Driven Positioning</b>`);
   msg3.push(`───────────────────────────`);
-  msg3.push(`<i>Scanning for potential insider-driven positioning</i>`);
+  msg3.push(`<i>Low-prob bets · ≤2 weeks · concentrated volume</i>`);
   msg3.push(``);
 
   try {
@@ -572,64 +519,6 @@ async function runMorningBriefing(env: Env): Promise<void> {
       }
     }
   } catch {}
-
-  // ── SECTION 7: What to Watch Today ──
-  msg3.push(``);
-  msg3.push(`<b>§7  WHAT TO WATCH TODAY</b>`);
-  msg3.push(`───────────────────────────`);
-
-  const watchItems: string[] = [];
-
-  // Earnings to watch
-  if (earningsToday.length > 0) {
-    const notable = earningsToday.slice(0, 4).map((e: any) => {
-      const time = e.hour === 'bmo' ? 'pre' : e.hour === 'amc' ? 'post' : '';
-      return `${e.symbol}${time ? ' (' + time + ')' : ''}`;
-    }).join(', ');
-    watchItems.push(`📅 <b>Earnings:</b> ${notable}`);
-  }
-
-  // Fed / macro events from Google Alerts
-  const fedAlerts = newsAlerts.filter((n: any) => n.category === 'fed-rates');
-  if (fedAlerts.length > 0) {
-    watchItems.push(`🏦 <b>Fed/Macro:</b> ${fedAlerts[0].title.slice(0, 70)}${fedAlerts[0].title.length > 70 ? '...' : ''}`);
-  }
-
-  // Risk flags
-  if (vix && vix.value >= 22) {
-    watchItems.push(`⚡ <b>Risk:</b> VIX elevated at ${vix.value.toFixed(1)} — size down, widen stops`);
-  }
-  if (moversResult.length >= 3) {
-    watchItems.push(`⚠️ <b>Risk:</b> ${moversResult.length} stocks with 10%+ moves — sector contagion possible`);
-  }
-  if (yieldCurve && yieldCurve.inverted) {
-    watchItems.push(`📉 <b>Risk:</b> Inverted yield curve — recession signal active`);
-  }
-
-  // Opportunities
-  if (spx && spx.changePercent < -1.5) {
-    watchItems.push(`🎯 <b>Opportunity:</b> Broad selloff may offer dip-buy entries in quality names`);
-  }
-  if (cryptoBTC && cryptoBTC.changePercent > 4) {
-    watchItems.push(`🎯 <b>Opportunity:</b> BTC momentum — watch for altcoin follow-through`);
-  }
-  const crashAlerts = newsAlerts.filter((n: any) => n.category === 'short-squeeze' || n.category === 'crash-signals');
-  if (crashAlerts.length > 0) {
-    watchItems.push(`🔍 <b>Monitor:</b> ${crashAlerts[0].title.slice(0, 65)}${crashAlerts[0].title.length > 65 ? '...' : ''}`);
-  }
-
-  // Key headline from market news
-  if (marketNews.length > 0) {
-    watchItems.push(`📰 <b>Top Story:</b> ${marketNews[0].headline.slice(0, 70)}${marketNews[0].headline.length > 70 ? '...' : ''}`);
-  }
-
-  if (watchItems.length === 0) {
-    watchItems.push(`No major catalysts on the calendar. Standard risk management applies.`);
-  }
-
-  for (const item of watchItems.slice(0, 5)) {
-    msg3.push(item);
-  }
 
   // ── Footer ──
   msg3.push(``);
@@ -1037,6 +926,89 @@ async function runEveningSummary(env: Env): Promise<void> {
   lines.push(`🌙 <i>See you tomorrow!</i>`);
 
   await sendDailyBriefing(lines.join('\n'), env);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// DAILY SUMMARY — 23:00 IST
+// Today's executed trades + current Holdings table
+// ═══════════════════════════════════════════════════════════════
+
+async function runDailySummary(env: Env): Promise<void> {
+  const lines: string[] = [
+    `📊 <b>YMSA Daily Summary</b>`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `<i>${new Date().toISOString().slice(0, 10)}</i>`,
+  ];
+
+  // ── Today's Executed Trades ──
+  const oneDayAgo = Date.now() - 24 * 60 * 60 * 1000;
+  const closedToday = env.DB ? await getClosedTradesSince(env.DB, oneDayAgo) : [];
+  const openTrades = env.DB ? await getOpenTrades(env.DB) : [];
+
+  // Trades opened today
+  const openedToday = openTrades.filter(t => t.opened_at >= oneDayAgo);
+  // Trades closed today
+  const soldToday = closedToday;
+
+  if (openedToday.length > 0 || soldToday.length > 0) {
+    lines.push(``, `⚡ <b>Today's Trades:</b>`);
+
+    for (const t of openedToday) {
+      const emoji = t.side === 'BUY' ? '🟢' : '🔴';
+      lines.push(`  ${emoji} <b>${t.symbol}</b> — ${t.side} ${t.qty} @ $${t.entry_price.toFixed(2)}`);
+    }
+
+    for (const t of soldToday) {
+      const pnl = t.pnl ?? 0;
+      const emoji = pnl >= 0 ? '🟢' : '🔴';
+      lines.push(`  ${emoji} <b>${t.symbol}</b> — SOLD ${t.qty} @ $${(t.exit_price ?? 0).toFixed(2)} → P/L: $${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}`);
+    }
+  } else {
+    lines.push(``, `⚡ <i>No trades executed today.</i>`);
+  }
+
+  // ── Holdings Table ──
+  if (openTrades.length > 0) {
+    const symbols = [...new Set(openTrades.map(t => t.symbol))];
+    const quotes = await yahooFinance.getMultipleQuotes(symbols);
+    const quoteMap = new Map(quotes.map(q => [q.symbol, q]));
+
+    lines.push(``, `💼 <b>Holdings:</b>`);
+    lines.push(`━━━━━━━━━━━━━━━━━━━━━━`);
+
+    let totalUnrealizedPnl = 0;
+
+    for (const trade of openTrades) {
+      if (trade.side !== 'BUY') continue;
+      const quote = quoteMap.get(trade.symbol);
+      const currentPrice = quote ? quote.price : trade.entry_price;
+      const unrealizedPnl = (currentPrice - trade.entry_price) * trade.qty;
+      const unrealizedPct = trade.entry_price > 0 ? ((currentPrice - trade.entry_price) / trade.entry_price) * 100 : 0;
+      const tradeDate = new Date(trade.opened_at).toISOString().slice(0, 10);
+
+      totalUnrealizedPnl += unrealizedPnl;
+
+      const emoji = unrealizedPnl >= 0 ? '🟢' : '🔴';
+      lines.push(``);
+      lines.push(`  <b>${trade.symbol}</b> — ${trade.qty} shares`);
+      lines.push(`  Bought: ${tradeDate} @ $${trade.entry_price.toFixed(2)}`);
+      lines.push(`  ${emoji} P/L: $${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)} (${unrealizedPct >= 0 ? '+' : ''}${unrealizedPct.toFixed(1)}%)`);
+    }
+
+    if (openTrades.filter(t => t.side === 'BUY').length > 1) {
+      lines.push(``);
+      lines.push(`  ─────────────────`);
+      const emoji = totalUnrealizedPnl >= 0 ? '🟢' : '🔴';
+      lines.push(`  ${emoji} <b>Total Unrealized P/L:</b> $${totalUnrealizedPnl >= 0 ? '+' : ''}${totalUnrealizedPnl.toFixed(2)}`);
+    }
+  } else {
+    lines.push(``, `💼 <i>No open holdings.</i>`);
+  }
+
+  lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
+
+  await sendTelegramMessage(lines.join('\n'), env);
+  console.log(`[v3] Daily Summary: ${openTrades.length} holdings, ${closedToday.length} closed today`);
 }
 
 // ═══════════════════════════════════════════════════════════════

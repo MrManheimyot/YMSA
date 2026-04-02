@@ -18,6 +18,7 @@ crons = [
   "0 15-21 * * 1-5",      # Every hour during market — EMA/Fib/Screener
   "0 18 * * 1-5",         # 20:00 IST  — Midday rebalance check
   "0 15 * * 1-5",         # 17:00 IST — Evening post-market summary
+  "0 21 * * 1-5",          # 23:00 IST — Daily execution summary + holdings
   "30 21 * * 1-5",        # 23:30 IST — After-hours/overnight setup
   "0 7 * * SUN",          # Sunday 09:00 IST — Weekly portfolio review
   "0 3 * * SAT",          # Saturday 05:00 IST — ML retrain + pairs recalibrate

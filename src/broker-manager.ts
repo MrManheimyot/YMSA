@@ -16,7 +16,7 @@ import type { Env, Signal, StockQuote, TechnicalIndicator, FibonacciResult } fro
 import type { SmartMoneyAnalysis } from './analysis/smart-money';
 import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
-import { synthesizeSignal, composeAlert, isZAiAvailable } from './ai/z-engine';
+import { synthesizeSignal, isZAiAvailable } from './ai/z-engine';
 import type { MergedTradeInfo } from './ai/z-engine';
 import { insertTelegramAlert, insertSignal, generateId } from './db/queries';
 
@@ -463,11 +463,8 @@ function planTradeAlert(trade: MergedTrade, aiReasoning?: string): MessagePlan |
   if (wasSentRecently(key)) return null;
   if (!canSendTradeAlert()) return null;
 
-  // Skip low confidence
-  if (trade.confidence < 55) return null;
-
-  // Skip if conflicting and low confidence
-  if (trade.conflicting && trade.confidence < 70) return null;
+  // Only send alerts with confidence ≥80 (per chief broker policy)
+  if (trade.confidence < 80) return null;
 
   const risk = Math.abs(trade.entry - trade.stopLoss);
   const rr1 = risk > 0 ? (Math.abs(trade.tp1 - trade.entry) / risk).toFixed(1) : '—';
@@ -509,16 +506,19 @@ function planTradeAlert(trade: MergedTrade, aiReasoning?: string): MessagePlan |
   const lines = [
     `${emoji} <b>TRADE ALERT — ${trade.direction} ${trade.symbol}</b>`,
     ``,
-    `<b>Reason:</b> ${trade.reasons[0]}`,
-    ...(aiReasoning ? [`🧠 <i>${aiReasoning}</i>`] : []),
-    ``,
-    `<b>Signals:</b>`,
+    `<b>Signals Triggered:</b>`,
     ...trade.signals.slice(0, 5).map(s => `• ${s}`),
     ...(trade.engines.length > 1 ? [`• Models: ${trade.engines.join(' + ')} (${trade.engines.length} agree)`] : []),
     ...(trade.conflicting ? [`• ⚠️ Conflicting signals from other engines`] : []),
     ``,
+    ...(trade.reasons.length > 0 ? [
+      `<b>Reason:</b> ${trade.reasons[0]}`,
+      ...(trade.reasons.length > 1 ? trade.reasons.slice(1, 3).map(r => `  + ${r}`) : []),
+    ] : []),
+    ...(aiReasoning ? [`🧠 <i>${aiReasoning}</i>`] : []),
+    ``,
     ...(techLines.length > 0 ? [
-      `<b>Technical Info:</b>`,
+      `<b>Technical Backing:</b>`,
       ...techLines.map(t => `• ${t}`),
       ``,
     ] : []),
@@ -638,38 +638,7 @@ export async function flushCycle(env: Env): Promise<number> {
     }
   }
 
-  // Z.AI Batch Compose: If 2+ high-confidence trades, try a composed batch alert
-  if (trades.length >= 2 && isZAiAvailable(env)) {
-    try {
-      const batchInfos: MergedTradeInfo[] = trades.slice(0, 3).map(t => ({
-        symbol: t.symbol,
-        direction: t.direction,
-        confidence: t.confidence,
-        engines: t.engines,
-        reasons: t.reasons,
-        entry: t.entry,
-        stopLoss: t.stopLoss,
-        tp1: t.tp1,
-        conflicting: t.conflicting,
-      }));
-      const composed = await composeAlert((env as any).AI, batchInfos, cycleRegime);
-      if (composed && composed.length > 20) {
-        const batchMsg: MessagePlan & { _batchTrades?: MergedTrade[] } = {
-          priority: trades[0].confidence >= 80 ? 'HIGH' : 'MEDIUM',
-          text: `🧠 <b>Z.AI Multi-Signal Alert</b>\n\n${composed}`,
-          silent: false,
-        };
-        batchMsg._batchTrades = trades.slice(0, 3);
-        messages.push(batchMsg);
-        for (const t of trades.slice(0, 3)) {
-          markSent(`${t.symbol}:${t.direction}`);
-          recordTradeAlert();
-        }
-      }
-    } catch (err) { console.error('[Z.AI] Compose alert failed:', err); }
-  }
-
-  // Individual trade alerts (skip if batch compose already sent them)
+  // Individual trade alerts — one per stock (chief broker policy: no batch grouping)
   for (const trade of trades) {
     // Z.AI: Enrich with LLM reasoning if available
     let aiReasoning: string | undefined;
@@ -792,5 +761,6 @@ export async function sendRiskAlert(text: string, env: Env): Promise<void> {
 }
 
 export async function sendExecutionAlert(text: string, env: Env): Promise<void> {
-  await sendTelegramMessageEx(`⚡ <b>EXECUTED</b>\n\n${text}`, env, false);
+  if (!text) return; // skip empty summaries (no executed trades)
+  await sendTelegramMessageEx(`📊 <b>DAILY SUMMARY</b>\n\n${text}`, env, false);
 }
