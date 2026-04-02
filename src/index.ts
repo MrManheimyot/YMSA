@@ -19,6 +19,7 @@ import { analyzeSmartMoney } from './analysis/smart-money';
 import { formatSmartMoneyTradeAlert, setCurrentRegime } from './alert-formatter';
 import { renderDashboard, getSystemStatus } from './dashboard';
 import { getPortfolioSnapshot, getPerformanceMetrics } from './execution/portfolio';
+import { runSimulationCycle } from './execution/simulator';
 import { getOpenTrades, getRecentTrades, getOpenPositions, getRecentSignals, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentDailyPnl, getAllLatestEnginePerformance, getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, updateTelegramAlertOutcome, getPnlDashboardData } from './db/queries';
 import { fetchGoogleAlerts, storeNewsAlerts, getFeedConfig } from './api/google-alerts';
 import { isAuthenticated, handleGoogleAuth, handleLogout, handleAuthMe } from './auth';
@@ -289,6 +290,12 @@ export default {
         return jsonResponse({ status: `Triggered job: ${job}`, completed: true });
       }
 
+      // ─── Manual Simulation Trigger ─────────────────
+      if (path === '/api/simulate') {
+        const result = await runSimulationCycle(env);
+        return jsonResponse({ status: 'Simulation cycle complete', ...result });
+      }
+
       // ═══════════════════════════════════════════════════
       // v3: EXECUTION & PORTFOLIO ROUTES
       // ═══════════════════════════════════════════════════
@@ -524,6 +531,7 @@ export default {
           'GET /api/pnl-dashboard',
           'GET /api/dashboard-data',
           'GET /api/trigger?job=morning|open|opening_range|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
+          'GET /api/simulate',
         ],
       }, 404);
     } catch (err) {

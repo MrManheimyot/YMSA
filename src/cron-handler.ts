@@ -27,6 +27,7 @@ import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades, getPe
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, pushStatArb, pushCryptoDefi, pushEventDriven, pushOptions, sendRiskAlert, sendExecutionAlert } from './broker-manager';
 import { scoreNewsSentiment, weeklyNarrative, isZAiAvailable } from './ai/z-engine';
+import { createSimulatedTrades, resolveSimulatedTrades, recordSimulatedDailyPnl } from './execution/simulator';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -625,6 +626,12 @@ async function runFullScan(env: Env, label: string): Promise<void> {
   }
 
   console.log(`[Cron] ${label}: Full scan complete — Broker sent ${sent} messages`);
+
+  // ── Paper Simulator: create trades from new alerts + resolve open ones ──
+  try {
+    await createSimulatedTrades(env);
+    await resolveSimulatedTrades(env);
+  } catch (e) { console.error('[Simulator] Post-scan cycle error:', e); }
 }
 
 async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
@@ -1632,8 +1639,15 @@ async function runMiddayRebalance(env: Env): Promise<void> {
 // ═══════════════════════════════════════════════════════════════
 
 async function runOvernightSetup(env: Env): Promise<void> {
-  // Record daily P&L
+  // Record daily P&L (Alpaca-based — works when broker connected)
   await recordDailyPnl(env);
+
+  // Paper Simulator: create any remaining trades, resolve, record simulated daily P&L
+  try {
+    await createSimulatedTrades(env);
+    await resolveSimulatedTrades(env);
+    await recordSimulatedDailyPnl(env);
+  } catch (e) { console.error('[Simulator] Overnight cycle error:', e); }
 
   // ── Auto-resolve PENDING Telegram alerts ──
   if (env.DB) {
