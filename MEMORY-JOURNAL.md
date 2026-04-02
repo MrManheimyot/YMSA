@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-01 (commit fc4e614)
+> Last updated: 2026-04-02 (commit b0abd36)
 
 ---
 
@@ -969,6 +969,10 @@ node .\node_modules\vitest\vitest.mjs run
 - ✅ **Crypto DEX mover fallback** — `runCryptoWhaleScan` falls back to top-volume DEX pairs with >5% moves when whale signals are empty (commit `3cb46f2`).
 - ✅ **Live engine stats in dashboard** — `/api/engine-stats` now merges `engine_performance` table with live signal counts from `signals` table. Engine cards show real-time signal counts (commit `fc4e614`).
 - ✅ **Verified live**: 38 signals from 3 engines (EVENT_DRIVEN: 12, SMART_MONEY: 8, OPTIONS: 2) visible in dashboard as of 2026-04-01.
+- ✅ **Critical P&L calculation fix** — `dailyPnl` was incorrectly set to `totalUnrealizedPnl` in `getPortfolioSnapshot()`. Now uses Alpaca's `last_equity` field: `dailyPnl = equity - lastEquity`. All daily P&L history recording and dashboard display now shows true daily P&L (commit `b0abd36`).
+- ✅ **Engine-stats live win rates** — `/api/engine-stats` now computes real-time `win_rate`, `pnl`, `trades_executed` from closed trades per engine instead of stale cron-recorded values (commit `b0abd36`).
+- ✅ **Realized P&L breakdown** — Dashboard daily P&L subtitle now shows `(realized: $X)` when trades closed today. `PortfolioSnapshot` includes `realizedPnlToday` and `lastEquity` fields (commit `b0abd36`).
+- ✅ **Morning Brief v2** — 6 premium sections + KEY INSIGHTS (2-3 data-driven commentary bullets) + WHAT TO WATCH TODAY (earnings, Fed, risks, opportunities). 50-stock tech scan with relaxed thresholds + volume spike indicator (commits `84dab35`, `a09e543`).
 
 ---
 
