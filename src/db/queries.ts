@@ -103,6 +103,12 @@ export async function getOpenTrades(db: D1Database): Promise<TradeRecord[]> {
   return (result.results || []) as unknown as TradeRecord[];
 }
 
+export async function cancelTrade(db: D1Database, tradeId: string): Promise<void> {
+  await db.prepare(
+    `UPDATE trades SET status = 'CANCELLED', closed_at = ? WHERE id = ?`
+  ).bind(Date.now(), tradeId).run();
+}
+
 export async function getTradesByEngine(db: D1Database, engineId: string, limit: number = 50): Promise<TradeRecord[]> {
   const result = await db.prepare(
     `SELECT * FROM trades WHERE engine_id = ? ORDER BY opened_at DESC LIMIT ?`

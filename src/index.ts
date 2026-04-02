@@ -495,8 +495,11 @@ export default {
           getRecentTrades(env.DB!, 200),
         ]);
 
+        // Filter out CANCELLED trades — only show OPEN and CLOSED
+        const activeTrades = rawTrades.filter(t => t.status !== 'CANCELLED');
+
         // Enrich open trades with live unrealized P&L
-        const openTrades = rawTrades.filter(t => t.status === 'OPEN');
+        const openTrades = activeTrades.filter(t => t.status === 'OPEN');
         const openSymbols = [...new Set(openTrades.map(t => t.symbol))];
         let priceMap = new Map<string, number>();
         if (openSymbols.length > 0) {
@@ -505,7 +508,7 @@ export default {
             priceMap = new Map(quotes.map(q => [q.symbol, q.price]));
           } catch {}
         }
-        const simTrades = rawTrades.map(t => {
+        const simTrades = activeTrades.map(t => {
           if (t.status !== 'OPEN') return t;
           const price = priceMap.get(t.symbol);
           if (!price) return t;

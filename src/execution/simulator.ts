@@ -13,8 +13,10 @@ import {
   getRecentDailyPnl,
   insertTrade,
   closeTrade,
+  cancelTrade,
   upsertDailyPnl,
   generateId,
+  updateTelegramAlertOutcome,
   type TelegramAlertRecord,
 } from '../db/queries';
 
@@ -46,6 +48,13 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
       .map(t => t.broker_order_id!)
   );
 
+  // Track open positions by symbol+side to prevent duplicate exposure
+  const openPositions = new Set(
+    existingTrades
+      .filter(t => t.status === 'OPEN')
+      .map(t => `${t.symbol}:${t.side}`)
+  );
+
   let created = 0;
   for (const alert of pending) {
     // Skip if already simulated
@@ -53,6 +62,10 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
 
     // Skip alerts without entry price
     if (!alert.entry_price || alert.entry_price <= 0) continue;
+
+    // Skip if we already have an OPEN trade for this symbol+side
+    const posKey = `${alert.symbol}:${alert.action}`;
+    if (openPositions.has(posKey)) continue;
 
     const tradeId = generateId(SIM_PREFIX);
     const qty = calculateSimQty(alert);
@@ -71,6 +84,7 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
       broker_order_id: alert.id, // links back to the telegram_alert
     });
 
+    openPositions.add(posKey); // prevent further dupes in this batch
     created++;
   }
 
@@ -135,6 +149,10 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
       const pnl = isBuy ? (exitPrice - entry) * trade.qty : (entry - exitPrice) * trade.qty;
       const pnlPct = entry > 0 ? ((exitPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
       await closeTrade(env.DB, trade.id, exitPrice, pnl, pnlPct);
+      // Sync telegram_alert outcome
+      if (trade.broker_order_id?.startsWith('tga_')) {
+        await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, 'LOSS', exitPrice, pnl, pnlPct, `Hit stop loss at $${exitPrice.toFixed(2)}`);
+      }
       resolved++;
       continue;
     }
@@ -145,6 +163,10 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
       const pnl = isBuy ? (exitPrice - entry) * trade.qty : (entry - exitPrice) * trade.qty;
       const pnlPct = entry > 0 ? ((exitPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
       await closeTrade(env.DB, trade.id, exitPrice, pnl, pnlPct);
+      // Sync telegram_alert outcome
+      if (trade.broker_order_id?.startsWith('tga_')) {
+        await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, 'WIN', exitPrice, pnl, pnlPct, `Hit take profit at $${exitPrice.toFixed(2)}`);
+      }
       resolved++;
       continue;
     }
@@ -155,6 +177,11 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
       const pnl = isBuy ? (currentPrice - entry) * trade.qty : (entry - currentPrice) * trade.qty;
       const pnlPct = entry > 0 ? ((currentPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
       await closeTrade(env.DB, trade.id, currentPrice, pnl, pnlPct);
+      // Sync telegram_alert outcome
+      const outcome = pnl >= 0 ? 'WIN' : 'LOSS';
+      if (trade.broker_order_id?.startsWith('tga_')) {
+        await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, outcome as 'WIN' | 'LOSS', currentPrice, pnl, pnlPct, `Auto-closed after 7d at $${currentPrice.toFixed(2)}`);
+      }
       resolved++;
     }
   }
@@ -163,6 +190,49 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
     console.log(`[Simulator] Resolved ${resolved} simulated trades`);
   }
   return resolved;
+}
+
+// ─── Backfill: Sync Closed Trade Outcomes to Telegram Alerts ─
+
+/**
+ * For any CLOSED trade whose linked telegram_alert is still PENDING,
+ * update the alert outcome to match. This catches trades that were
+ * closed before the outcome-sync logic was deployed.
+ */
+export async function syncMissingOutcomes(env: Env): Promise<number> {
+  if (!env.DB) return 0;
+
+  const allTrades = await getRecentTrades(env.DB, 10_000);
+  const closedTrades = allTrades.filter(
+    t => t.status === 'CLOSED' && t.broker_order_id?.startsWith('tga_')
+  );
+  if (closedTrades.length === 0) return 0;
+
+  const pendingAlerts = await getPendingTelegramAlerts(env.DB);
+  const pendingIds = new Set(pendingAlerts.map(a => a.id));
+
+  let synced = 0;
+  for (const trade of closedTrades) {
+    if (!pendingIds.has(trade.broker_order_id!)) continue;
+
+    const pnl = trade.pnl ?? 0;
+    const pnlPct = trade.pnl_pct ?? 0;
+    const outcome: 'WIN' | 'LOSS' = pnl >= 0 ? 'WIN' : 'LOSS';
+    const exitPrice = trade.exit_price ?? trade.entry_price;
+    const note = pnl >= 0
+      ? `Closed at $${exitPrice.toFixed(2)} (profit)`
+      : `Closed at $${exitPrice.toFixed(2)} (stop loss)`;
+
+    await updateTelegramAlertOutcome(
+      env.DB!, trade.broker_order_id!, outcome, exitPrice, pnl, pnlPct, note
+    );
+    synced++;
+  }
+
+  if (synced > 0) {
+    console.log(`[Simulator] Backfilled ${synced} telegram alert outcomes`);
+  }
+  return synced;
 }
 
 // ─── Simulated Daily P&L Recording ──────────────────────────
@@ -204,8 +274,15 @@ export async function recordSimulatedDailyPnl(env: Env): Promise<void> {
   const totalEquity = SIM_STARTING_EQUITY + realizedPnl + unrealizedPnl;
 
   // Yesterday's equity for daily change
-  const recentPnl = await getRecentDailyPnl(env.DB, 1);
-  const yesterdayEquity = recentPnl.length > 0 ? recentPnl[0].total_equity : SIM_STARTING_EQUITY;
+  // If the most recent record is today (re-run), look at the one before it
+  const recentPnl = await getRecentDailyPnl(env.DB, 2);
+  let yesterdayEquity = SIM_STARTING_EQUITY;
+  for (const rec of recentPnl) {
+    if (rec.date !== today) {
+      yesterdayEquity = rec.total_equity;
+      break;
+    }
+  }
   const dailyPnl = totalEquity - yesterdayEquity;
   const dailyPnlPct = yesterdayEquity > 0 ? (dailyPnl / yesterdayEquity) * 100 : 0;
 
@@ -240,6 +317,35 @@ export async function recordSimulatedDailyPnl(env: Env): Promise<void> {
 // ─── Full Simulation Cycle ──────────────────────────────────
 
 /**
+ * Cancel duplicate open trades — keep only the earliest OPEN trade per symbol+side.
+ */
+async function cancelDuplicateOpenTrades(env: Env): Promise<number> {
+  if (!env.DB) return 0;
+  const openTrades = await getOpenTrades(env.DB);
+  const seen = new Map<string, string>(); // symbol:side → earliest trade ID
+  const dupes: string[] = [];
+
+  // openTrades sorted DESC by opened_at, so iterate in reverse for earliest first
+  for (let i = openTrades.length - 1; i >= 0; i--) {
+    const t = openTrades[i];
+    const key = `${t.symbol}:${t.side}`;
+    if (!seen.has(key)) {
+      seen.set(key, t.id);
+    } else {
+      dupes.push(t.id);
+    }
+  }
+
+  for (const id of dupes) {
+    await cancelTrade(env.DB!, id);
+  }
+  if (dupes.length > 0) {
+    console.log(`[Simulator] Cancelled ${dupes.length} duplicate open trades`);
+  }
+  return dupes.length;
+}
+
+/**
  * Run the complete simulation cycle:
  * 1. Create trades from new alerts
  * 2. Resolve open trades against live prices
@@ -251,6 +357,8 @@ export async function runSimulationCycle(env: Env): Promise<{
 }> {
   const created = await createSimulatedTrades(env);
   const resolved = await resolveSimulatedTrades(env);
+  await cancelDuplicateOpenTrades(env);
+  await syncMissingOutcomes(env);
   await recordSimulatedDailyPnl(env);
   return { created, resolved };
 }

@@ -639,12 +639,14 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
   <!-- v3.1: P&L ANALYTICS DASHBOARD                          -->
   <!-- ═══════════════════════════════════════════════════════ -->
   <div class="section" id="pnl-section">
-    <div class="section-hdr">📊 P&L Analytics Dashboard</div>
+    <div class="section-hdr">📊 P&L Analytics Dashboard <span style="font-size:11px;padding:2px 10px;border-radius:10px;background:rgba(49,141,255,.15);color:#319dff;margin-left:8px;vertical-align:middle;letter-spacing:.5px">PAPER TRADING</span></div>
 
     <!-- P&L Hero Metrics -->
     <div class="pnl-hero" id="pnl-hero">
-      <div class="card"><div class="card-title">Cumulative P&L</div><div class="card-value" id="pnl-cumulative">—</div><div class="card-sub">All-time realized</div></div>
-      <div class="card"><div class="card-title">Best Month</div><div class="card-value up" id="pnl-best-month">—</div><div class="card-sub" id="pnl-best-month-label">—</div></div>
+      <div class="card"><div class="card-title">Portfolio P&L</div><div class="card-value" id="pnl-cumulative">—</div><div class="card-sub" id="pnl-cumulative-sub">Realized + Unrealized</div></div>
+      <div class="card"><div class="card-title">Realized</div><div class="card-value" id="pnl-realized">—</div><div class="card-sub" id="pnl-realized-sub">Closed trades</div></div>
+      <div class="card"><div class="card-title">Unrealized</div><div class="card-value" id="pnl-unrealized">—</div><div class="card-sub" id="pnl-unrealized-sub">Open positions</div></div>
+      <div class="card"><div class="card-title">Win Rate</div><div class="card-value" id="pnl-winrate">—</div><div class="card-sub" id="pnl-winrate-sub">Closed trades</div></div>
       <div class="card"><div class="card-title">Max Drawdown</div><div class="card-value down" id="pnl-max-dd">—</div><div class="card-sub">Peak-to-trough</div></div>
       <div class="card"><div class="card-title">Current Streak</div><div id="pnl-streak" class="card-value">—</div><div class="card-sub" id="pnl-streak-sub">—</div></div>
     </div>
@@ -715,7 +717,7 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
     <div class="tab-content" id="tab-simtrades">
       <div class="card" style="padding:0;overflow-x:auto">
         <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.06)">
-          <div class="card-title" style="margin:0">Simulated Trades</div>
+          <div class="card-title" style="margin:0">Simulated Trades <span style="font-size:9px;color:var(--c-on-surface-2);margin-left:4px">$100K virtual capital · 2% risk per trade</span></div>
           <div style="display:flex;gap:6px;flex-wrap:wrap" id="sim-trade-filters">
             <button class="chip active" onclick="filterSimTrades('all',this)">All</button>
             <button class="chip" onclick="filterSimTrades('OPEN',this)">🟢 Open</button>
@@ -792,7 +794,7 @@ async function loadDashboard() {
   renderNews(news);
   renderSparkline(dailyPnl);
   renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats);
-  renderPnlDashboard(dashData?.pnlDash);
+  renderPnlDashboard(dashData?.pnlDash, dashData?.simTrades);
   renderSimTrades(dashData?.simTrades);
   $('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();
 }
@@ -1159,6 +1161,8 @@ const ENGINE_NAMES = {
   'smart-money': 'SMC', 'fibonacci': 'FIB', 'stock-screener': 'SCR',
   'multi-timeframe': 'MTF', 'pairs-trading': 'PAIR', 'regime': 'REG',
   'crypto-dex': 'DEX', 'commodity': 'CMD', 'momentum': 'MOM',
+  'Smart Money': 'SMAR', 'Event Driven': 'EVEN', 'Options': 'OPTI',
+  'Momentum': 'MOM', 'Stock Screener': 'SCR', 'Fibonacci': 'FIB',
 };
 
 function shortEngine(engineId) {
@@ -1440,24 +1444,45 @@ function switchPnlTab(tabId, btn) {
   $('tab-' + tabId).classList.add('active');
 }
 
-function renderPnlDashboard(data) {
+function renderPnlDashboard(data, simTrades) {
   if (!data) {
     $('pnl-cumulative').textContent = '—';
     return;
   }
 
   const { dailyPnl, monthlyPnl, equityCurve, drawdownSeries, tradesByEngine, tradesBySymbol, streaks } = data;
+  const trades = Array.isArray(simTrades) ? simTrades : [];
 
-  // ── Hero Metrics ──
-  const cumulativePnl = dailyPnl.reduce((s, d) => s + d.daily_pnl, 0);
-  $('pnl-cumulative').textContent = fmtUsd(cumulativePnl);
-  $('pnl-cumulative').className = 'card-value ' + pnlClass(cumulativePnl);
+  // ── LIVE P&L from actual trade data (not stale daily_pnl snapshot) ──
+  const closedTrades = trades.filter(t => t.status === 'CLOSED');
+  const openTrades = trades.filter(t => t.status === 'OPEN');
+  const realizedPnl = closedTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const unrealizedPnl = openTrades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const totalPnl = realizedPnl + unrealizedPnl;
 
-  // Best month
-  if (monthlyPnl.length > 0) {
-    const best = [...monthlyPnl].sort((a, b) => b.pnl - a.pnl)[0];
-    $('pnl-best-month').textContent = fmtUsd(best.pnl);
-    $('pnl-best-month-label').textContent = best.month;
+  $('pnl-cumulative').textContent = fmtUsd(totalPnl);
+  $('pnl-cumulative').className = 'card-value ' + pnlClass(totalPnl);
+  const portfolioValue = 100000 + totalPnl;
+  $('pnl-cumulative-sub').textContent = 'Portfolio: ' + fmtUsd(portfolioValue);
+
+  // Realized card
+  $('pnl-realized').textContent = fmtUsd(realizedPnl);
+  $('pnl-realized').className = 'card-value ' + pnlClass(realizedPnl);
+  $('pnl-realized-sub').textContent = closedTrades.length + ' closed trade' + (closedTrades.length !== 1 ? 's' : '');
+
+  // Unrealized card
+  $('pnl-unrealized').textContent = fmtUsd(unrealizedPnl);
+  $('pnl-unrealized').className = 'card-value ' + pnlClass(unrealizedPnl);
+  $('pnl-unrealized-sub').textContent = openTrades.length + ' open position' + (openTrades.length !== 1 ? 's' : '');
+
+  // Live Win Rate from closed trades
+  const wins = closedTrades.filter(t => (t.pnl || 0) > 0);
+  const losses = closedTrades.filter(t => (t.pnl || 0) < 0);
+  if (closedTrades.length > 0) {
+    const wr = (wins.length / closedTrades.length) * 100;
+    $('pnl-winrate').textContent = fmt(wr, 0) + '%';
+    $('pnl-winrate').className = 'card-value ' + (wr >= 50 ? 'up' : 'down');
+    $('pnl-winrate-sub').textContent = wins.length + 'W / ' + losses.length + 'L';
   }
 
   // Max drawdown
@@ -1617,7 +1642,7 @@ function _renderSimTradesFiltered() {
       <td class="mono" style="font-size:11px;white-space:nowrap">\${new Date(t.opened_at).toLocaleDateString()} \${new Date(t.opened_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</td>
       <td class="mono" style="font-weight:600">\${t.symbol}</td>
       <td style="color:\${sideColor};font-weight:600">\${t.side}</td>
-      <td class="mono" style="font-size:10px">\${t.engine_id}</td>
+      <td class="mono" style="font-size:10px" title="\${t.engine_id}">\${shortEngine(t.engine_id)}</td>
       <td class="mono">\${t.qty}</td>
       <td class="mono">\${fmtUsd(t.entry_price)}</td>
       <td class="mono" style="color:var(--c-sell)">\${t.stop_loss ? fmtUsd(t.stop_loss) : '—'}</td>
@@ -1629,6 +1654,20 @@ function _renderSimTradesFiltered() {
       <td class="mono" style="font-size:11px">\${ageLabel}</td>
     </tr>\`;
   }).join('');
+
+  // ── Summary row ──
+  const totalPnl = trades.reduce((s, t) => s + (t.pnl || 0), 0);
+  const openCount = trades.filter(t => t.status === 'OPEN').length;
+  const closedCount = trades.filter(t => t.status === 'CLOSED').length;
+  const winsCount = trades.filter(t => t.status === 'CLOSED' && (t.pnl || 0) > 0).length;
+  const lossCount = trades.filter(t => t.status === 'CLOSED' && (t.pnl || 0) < 0).length;
+  const summaryColor = totalPnl >= 0 ? 'var(--c-buy)' : 'var(--c-sell)';
+  body.innerHTML += \`<tr style="border-top:2px solid rgba(255,255,255,.15);background:rgba(255,255,255,.03);font-weight:600">
+    <td colspan="5" style="text-align:right;font-size:11px;padding-right:8px">PORTFOLIO TOTAL — \${trades.length} trades (\${openCount} open, \${winsCount}W / \${lossCount}L)</td>
+    <td colspan="4"></td>
+    <td class="mono" style="color:\${summaryColor}">\${fmtUsd(totalPnl)}</td>
+    <td colspan="3" class="mono" style="color:\${summaryColor}">\${totalPnl >= 0 ? '+' : ''}\${fmt(totalPnl / 1000, 2)}K</td>
+  </tr>\`;
 }
 
 // ── Canvas Line Chart (lightweight, no external libs) ──
