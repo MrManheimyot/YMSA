@@ -16,6 +16,7 @@ import type { Env, Signal, StockQuote, TechnicalIndicator, FibonacciResult } fro
 import type { SmartMoneyAnalysis } from './analysis/smart-money';
 import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
+import { getEngineAdjustments } from './analysis/regime';
 import { synthesizeSignal, isZAiAvailable } from './ai/z-engine';
 import type { MergedTradeInfo } from './ai/z-engine';
 import { insertTelegramAlert, insertSignal, generateId } from './db/queries';
@@ -120,6 +121,13 @@ export function addContext(line: string): void {
 }
 
 export function pushEngineOutput(output: EngineOutput): void {
+  // Apply regime weight multiplier to engine confidence
+  if (cycleRegime) {
+    const adjustments = getEngineAdjustments(cycleRegime);
+    const engineKey = output.engine.toUpperCase().replace(/\s+/g, '_') as keyof typeof adjustments;
+    const multiplier = adjustments[engineKey] ?? 1.0;
+    output.confidence = Math.min(100, Math.round(output.confidence * multiplier));
+  }
   cycleOutputs.push(output);
 }
 
@@ -128,6 +136,13 @@ export function pushEngineOutput(output: EngineOutput): void {
  * Use for engines that don't call executeBatch (stat-arb, crypto, options, event-driven).
  */
 export async function pushAndRecordSignal(output: EngineOutput, db: D1Database | null): Promise<void> {
+  // Apply regime weight multiplier to engine confidence
+  if (cycleRegime) {
+    const adjustments = getEngineAdjustments(cycleRegime);
+    const engineKey = output.engine.toUpperCase().replace(/\s+/g, '_') as keyof typeof adjustments;
+    const multiplier = adjustments[engineKey] ?? 1.0;
+    output.confidence = Math.min(100, Math.round(output.confidence * multiplier));
+  }
   cycleOutputs.push(output);
   if (!db || output.direction === 'HOLD' || output.direction === 'NEUTRAL') return;
   try {
@@ -157,7 +172,7 @@ export function pushSmartMoney(
   atr: number | null,
   indicators?: TechnicalIndicator[],
 ): void {
-  if (smc.score < 50) return;
+  if (smc.score < 65) return; // Raised from 50 — require stronger institutional signal
 
   // Store indicators for this symbol if provided
   if (indicators && indicators.length > 0) {
@@ -177,8 +192,8 @@ export function pushSmartMoney(
     sl = Math.min(sl, quote.price * 1.08);
   }
 
-  const tp1 = dir === 'BUY' ? quote.price + effectiveATR * 2 : quote.price - effectiveATR * 2;
-  const tp2 = dir === 'BUY' ? quote.price + effectiveATR * 3.5 : quote.price - effectiveATR * 3.5;
+  const tp1 = dir === 'BUY' ? quote.price + effectiveATR * 3 : quote.price - effectiveATR * 3;
+  const tp2 = dir === 'BUY' ? quote.price + effectiveATR * 5 : quote.price - effectiveATR * 5;
 
   const modelNames: Record<string, string> = {
     ORDER_BLOCK: 'Order Block', FVG: 'Fair Value Gap',
@@ -263,7 +278,7 @@ export function pushTechnical(
   if (rsi && (rsi.value < 25 || rsi.value > 75)) conf += 10;
   conf = Math.min(100, conf);
 
-  if (conf < 40) return; // too weak
+  if (conf < 55) return; // Raised from 40 — require stronger confluence
 
   const atr = indicators.find(i => i.indicator === 'ATR')?.value ?? quote.price * 0.02;
 
@@ -274,8 +289,8 @@ export function pushTechnical(
     confidence: conf,
     entry: quote.price,
     stopLoss: dir === 'BUY' ? Math.max(quote.price - atr * 2, quote.price * 0.92) : Math.min(quote.price + atr * 2, quote.price * 1.08),
-    tp1: dir === 'BUY' ? quote.price + atr * 2 : quote.price - atr * 2,
-    tp2: dir === 'BUY' ? quote.price + atr * 3.5 : quote.price - atr * 3.5,
+    tp1: dir === 'BUY' ? quote.price + atr * 4 : quote.price - atr * 4,
+    tp2: dir === 'BUY' ? quote.price + atr * 6 : quote.price - atr * 6,
     reason: signals.slice(0, 2).map(s => s.description).join('. ') + '.',
     signals: signals.map(s => `${s.title} (${s.priority})`).slice(0, 4),
   });
@@ -426,19 +441,39 @@ function mergeBySymbol(outputs: EngineOutput[]): MergedTrade[] {
     const dir = buyWeight >= sellWeight ? 'BUY' as const : 'SELL' as const;
     const aligned = dir === 'BUY' ? buyOuts : sellOuts;
 
+    // ── Quality Gate: Require ≥2 engines to agree (no single-engine alerts) ──
+    if (aligned.length < 2) continue;
+
     // Best entry/SL/TP from highest-confidence engine
     const best = aligned.sort((a, b) => b.confidence - a.confidence)[0];
 
-    // Confidence boost for multi-engine agreement
+    // Confidence boost for multi-engine agreement (reduced from 8 to 5 per engine)
     const baseConf = best.confidence;
-    const agreementBonus = Math.min(15, (aligned.length - 1) * 8);
-    const conflictPenalty = conflicting ? 20 : 0;
+    const agreementBonus = Math.min(15, (aligned.length - 1) * 5);
+    const conflictPenalty = conflicting ? 25 : 0; // Increased from 20 to 25
     const finalConf = Math.min(100, Math.max(0, baseConf + agreementBonus - conflictPenalty));
+
+    // ── Regime Confidence Modifier ──
+    let regimeModifier = 0;
+    if (cycleRegime) {
+      const isTrendAligned =
+        (dir === 'BUY' && cycleRegime.regime === 'TRENDING_UP') ||
+        (dir === 'SELL' && cycleRegime.regime === 'TRENDING_DOWN');
+      const isCounterTrend =
+        (dir === 'BUY' && cycleRegime.regime === 'TRENDING_DOWN') ||
+        (dir === 'SELL' && cycleRegime.regime === 'TRENDING_UP');
+
+      if (isTrendAligned) regimeModifier = +10;
+      else if (isCounterTrend) regimeModifier = -15;
+      if (cycleRegime.vix >= 30) regimeModifier -= 10;
+    }
+
+    const regimeAdjConf = Math.min(100, Math.max(0, finalConf + regimeModifier));
 
     merged.push({
       symbol,
       direction: dir,
-      confidence: finalConf,
+      confidence: regimeAdjConf,
       entry: best.entry ?? 0,
       stopLoss: best.stopLoss ?? 0,
       tp1: best.tp1 ?? 0,
@@ -463,14 +498,30 @@ function planTradeAlert(trade: MergedTrade, aiReasoning?: string): MessagePlan |
   if (wasSentRecently(key)) return null;
   if (!canSendTradeAlert()) return null;
 
-  // Only send alerts with confidence ≥80 (per chief broker policy)
-  if (trade.confidence < 80) return null;
+  // ── Quality Gate 1: Raised confidence threshold (was 80, now 85) ──
+  if (trade.confidence < 85) return null;
 
+  // ── Quality Gate 2: Risk:Reward ≥ 2.0 ──
   const risk = Math.abs(trade.entry - trade.stopLoss);
+  if (risk > 0) {
+    const rr1 = Math.abs(trade.tp1 - trade.entry) / risk;
+    if (rr1 < 2.0) return null; // Block poor R:R setups
+  }
+
+  // ── Quality Gate 3: Block hard counter-trend trades ──
+  if (cycleRegime) {
+    const isHardCounter =
+      (trade.direction === 'BUY' && cycleRegime.regime === 'TRENDING_DOWN' && cycleRegime.confidence >= 70) ||
+      (trade.direction === 'SELL' && cycleRegime.regime === 'TRENDING_UP' && cycleRegime.confidence >= 70);
+    if (isHardCounter) return null;
+
+    // Block all trades in extreme volatility
+    if (cycleRegime.vix >= 35) return null;
+  }
   const rr1 = risk > 0 ? (Math.abs(trade.tp1 - trade.entry) / risk).toFixed(1) : '—';
   const rr2 = risk > 0 ? (Math.abs(trade.tp2 - trade.entry) / risk).toFixed(1) : '—';
 
-  const confLabel = trade.confidence >= 80 ? 'High' : trade.confidence >= 55 ? 'Medium' : 'Low';
+  const confLabel = trade.confidence >= 85 ? 'High' : trade.confidence >= 70 ? 'Medium' : 'Low';
   const emoji = trade.direction === 'BUY' ? '🟢' : '🔴';
 
   // Regime context

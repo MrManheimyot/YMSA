@@ -57,7 +57,7 @@ describe('detectSignals', () => {
   });
 
   it('detects 52-week high proximity', () => {
-    const quote = { ...baseQuote, price: 177, week52High: 180, week52Low: 120 };
+    const quote = { ...baseQuote, price: 179.5, week52High: 180, week52Low: 120 };
     const signals = detectSignals(quote, [], null, mockEnv);
     const highSignal = signals.find((s) => s.type === '52W_HIGH_PROXIMITY');
     expect(highSignal).toBeDefined();

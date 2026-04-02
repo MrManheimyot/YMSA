@@ -65,6 +65,12 @@ export function computeIndicators(
     indicators.push({ symbol, indicator: 'ATR', value: atr, timestamp: now, timeframe });
   }
 
+  // ADX(14) — trend strength indicator
+  const adx = calcADX(chronological, 14);
+  if (adx !== null) {
+    indicators.push({ symbol, indicator: 'ADX', value: adx, timestamp: now, timeframe });
+  }
+
   return indicators;
 }
 
@@ -190,4 +196,67 @@ function calcATR(candles: OHLCV[], period: number): number | null {
   }
 
   return atr;
+}
+
+/** Calculate ADX (Average Directional Index) using Wilder's smoothing */
+function calcADX(candles: OHLCV[], period: number): number | null {
+  if (candles.length < period * 2 + 1) return null;
+
+  const plusDM: number[] = [];
+  const minusDM: number[] = [];
+  const tr: number[] = [];
+
+  for (let i = 1; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevHigh = candles[i - 1].high;
+    const prevLow = candles[i - 1].low;
+    const prevClose = candles[i - 1].close;
+
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    tr.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
+  }
+
+  if (tr.length < period * 2) return null;
+
+  // Wilder's smoothing for +DM, -DM, TR
+  let smoothPlusDM = 0, smoothMinusDM = 0, smoothTR = 0;
+  for (let i = 0; i < period; i++) {
+    smoothPlusDM += plusDM[i];
+    smoothMinusDM += minusDM[i];
+    smoothTR += tr[i];
+  }
+
+  const dx: number[] = [];
+  for (let i = period; i < tr.length; i++) {
+    if (i > period) {
+      smoothPlusDM = smoothPlusDM - smoothPlusDM / period + plusDM[i];
+      smoothMinusDM = smoothMinusDM - smoothMinusDM / period + minusDM[i];
+      smoothTR = smoothTR - smoothTR / period + tr[i];
+    }
+
+    const plusDI = smoothTR > 0 ? (smoothPlusDM / smoothTR) * 100 : 0;
+    const minusDI = smoothTR > 0 ? (smoothMinusDM / smoothTR) * 100 : 0;
+    const diSum = plusDI + minusDI;
+    if (diSum > 0) {
+      dx.push((Math.abs(plusDI - minusDI) / diSum) * 100);
+    }
+  }
+
+  if (dx.length < period) return null;
+
+  // ADX = smoothed average of DX values
+  let adx = 0;
+  for (let i = 0; i < period; i++) adx += dx[i];
+  adx /= period;
+
+  for (let i = period; i < dx.length; i++) {
+    adx = (adx * (period - 1) + dx[i]) / period;
+  }
+
+  return adx;
 }

@@ -241,8 +241,11 @@ export function analyzeSmartMoney(
 
   let bullScore = 0, bearScore = 0;
   for (const s of allSignals) {
-    if (s.direction === 'BULLISH') bullScore += s.strength;
-    else bearScore += s.strength;
+    // Age decay: zones lose 10% strength per 5 candles of age
+    const ageDecay = Math.pow(0.9, s.age / 5);
+    const adjustedStrength = s.strength * ageDecay;
+    if (s.direction === 'BULLISH') bullScore += adjustedStrength;
+    else bearScore += adjustedStrength;
   }
 
   const total = bullScore + bearScore;
