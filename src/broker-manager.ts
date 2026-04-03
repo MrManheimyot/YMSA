@@ -692,6 +692,17 @@ export async function flushCycle(env: Env): Promise<number> {
 
   // Individual trade alerts — one per stock (chief broker policy: no batch grouping)
   for (const trade of trades) {
+    // ── Gap 3 Fix: No tracking = no send ──
+    // If D1 insert failed or was skipped, this trade has no P&L tracking.
+    // Don't send phantom alerts to Telegram.
+    if (env.DB) {
+      const key = `${trade.symbol}:${trade.direction}`;
+      if (!loggedTradeIds.has(key)) {
+        console.log(`[Broker] Skipping ${trade.symbol} ${trade.direction} — not tracked in D1`);
+        continue;
+      }
+    }
+
     // ── Cross-Validation Layer: Validate trade parameters ──
     const tradeValidation = validateTradeParams({
       entry: trade.entry,

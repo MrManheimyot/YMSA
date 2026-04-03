@@ -11,7 +11,7 @@ import type {
   PortfolioState,
   Position,
 } from './types';
-import { getKillSwitchState, upsertKillSwitchState } from '../db/queries';
+import { getKillSwitchState, upsertKillSwitchState, upsertEngineBudget, loadEngineBudgets } from '../db/queries';
 
 /**
  * Default risk limits — conservative starting point
@@ -232,6 +232,34 @@ export const ENGINE_BUDGETS: Record<string, number> = {
   CRYPTO_DEFI: 0.10,
   EVENT_DRIVEN: 0.10,
 };
+
+/**
+ * Load persisted engine budgets + probation state from D1.
+ * Called at the start of each cron cycle to survive cold starts.
+ */
+export async function loadPersistedBudgets(db: D1Database | undefined): Promise<void> {
+  if (!db) return;
+  try {
+    const rows = await loadEngineBudgets(db);
+    if (rows.length === 0) return; // No persisted budgets — use defaults
+    for (const row of rows) {
+      if (ENGINE_BUDGETS[row.engine_id] !== undefined) {
+        ENGINE_BUDGETS[row.engine_id] = row.budget;
+      }
+      // Restore probation state
+      if (row.on_probation) {
+        probationState[row.engine_id] = {
+          onProbation: true,
+          originalBudget: row.original_budget ?? ENGINE_BUDGETS[row.engine_id],
+          consecutiveWins: 0,
+        };
+      }
+    }
+    console.log(`[RiskController] Loaded ${rows.length} persisted engine budgets from D1`);
+  } catch (err) {
+    console.error('[RiskController] Failed to load persisted budgets:', err);
+  }
+}
 
 /**
  * Tiered kill switch thresholds
@@ -508,6 +536,11 @@ export async function rebalanceEngineBudgets(
     }
 
     ENGINE_BUDGETS[engineId] = newBudget;
+
+    // Persist to D1 — survives Worker cold starts
+    try {
+      await upsertEngineBudget(db!, engineId, newBudget, probationState[engineId]?.onProbation || false, probationState[engineId]?.originalBudget || null);
+    } catch { /* best-effort persist */ }
   }
 
   return changes;
@@ -592,6 +625,8 @@ export async function evaluateEngineProbation(
           wins,
           consecutiveWins: consWins,
         });
+        // Persist probation to D1
+        try { await upsertEngineBudget(db!, engineId, MIN_ENGINE_BUDGET, true, state.originalBudget); } catch { /* best-effort */ }
       }
       // Check recovery: 5 consecutive wins → restore
       else if (state.onProbation && consWins >= 5) {
@@ -607,6 +642,8 @@ export async function evaluateEngineProbation(
           wins,
           consecutiveWins: consWins,
         });
+        // Persist recovery to D1
+        try { await upsertEngineBudget(db!, engineId, state.originalBudget, false, null); } catch { /* best-effort */ }
       }
       // Existing probation — also check if general performance improved (>40% WR with ≥10 trades)
       else if (state.onProbation && total >= 10 && wins / total > 0.4) {
@@ -622,6 +659,8 @@ export async function evaluateEngineProbation(
           wins,
           consecutiveWins: consWins,
         });
+        // Persist recovery to D1
+        try { await upsertEngineBudget(db!, engineId, state.originalBudget, false, null); } catch { /* best-effort */ }
       }
     } catch (err) {
       console.error(`[P5] Probation check failed for ${engineId}:`, err);

@@ -630,3 +630,27 @@ export async function expireOldTelegramAlerts(db: D1Database, maxAgeMs: number):
   ).bind(Date.now(), cutoff).run();
   return result.meta?.changes ?? 0;
 }
+
+// ─── Engine Budget Persistence ───────────────────────────────
+
+export async function upsertEngineBudget(
+  db: D1Database,
+  engineId: string,
+  budget: number,
+  onProbation: boolean,
+  originalBudget: number | null,
+): Promise<void> {
+  await db.prepare(
+    `INSERT INTO engine_budgets (engine_id, budget, on_probation, original_budget, updated_at)
+     VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(engine_id) DO UPDATE SET budget = excluded.budget, on_probation = excluded.on_probation, original_budget = excluded.original_budget, updated_at = excluded.updated_at`
+  ).bind(engineId, budget, onProbation ? 1 : 0, originalBudget, Date.now()).run();
+}
+
+export async function loadEngineBudgets(
+  db: D1Database,
+): Promise<Array<{ engine_id: string; budget: number; on_probation: boolean; original_budget: number | null }>> {
+  const result = await db.prepare(`SELECT * FROM engine_budgets`).all();
+  return ((result.results || []) as unknown as Array<{ engine_id: string; budget: number; on_probation: number; original_budget: number | null }>)
+    .map(r => ({ engine_id: r.engine_id, budget: r.budget, on_probation: r.on_probation === 1, original_budget: r.original_budget }));
+}

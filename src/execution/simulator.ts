@@ -63,8 +63,8 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
     // Skip alerts without entry price
     if (!alert.entry_price || alert.entry_price <= 0) continue;
 
-    // Only simulate alerts that passed the Telegram confidence gate (≥85)
-    if (alert.confidence < 85) continue;
+    // Simulate all tracked alerts (confidence ≥55 matches D1 insert gate)
+    if (alert.confidence < 55) continue;
 
     // Skip if we already have an OPEN trade for this symbol+side
     const posKey = `${alert.symbol}:${alert.action}`;

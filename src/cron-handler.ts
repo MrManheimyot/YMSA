@@ -22,7 +22,7 @@ import { detectRegime, getEngineAdjustments, formatRegimeAlert } from './analysi
 import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from './api/google-alerts';
 import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEnginePerformance, getPerformanceMetrics, formatPerformanceReport } from './execution/portfolio';
 import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
-import { evaluateKillSwitch, formatRiskEvent, rebalanceEngineBudgets, formatBudgetRebalance, evaluateEngineProbation, formatProbationReport } from './agents/risk-controller';
+import { evaluateKillSwitch, formatRiskEvent, rebalanceEngineBudgets, formatBudgetRebalance, evaluateEngineProbation, formatProbationReport, loadPersistedBudgets } from './agents/risk-controller';
 import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades, getPendingTelegramAlerts, updateTelegramAlertOutcome, expireOldTelegramAlerts } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, pushStatArb, pushCryptoDefi, pushEventDriven, pushOptions, sendRiskAlert, sendExecutionAlert } from './broker-manager';
@@ -39,6 +39,9 @@ export async function handleCronEvent(
 ): Promise<void> {
   const jobType = identifyCronJob(cron);
   console.log(`[Cron] Running job: ${jobType} (cron: ${cron})`);
+
+  // Load persisted engine budgets + probation state from D1 (survives cold starts)
+  await loadPersistedBudgets(env.DB);
 
   try {
     switch (jobType) {

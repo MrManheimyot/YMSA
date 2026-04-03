@@ -195,3 +195,12 @@ CREATE INDEX idx_tg_alerts_symbol ON telegram_alerts(symbol);
 CREATE INDEX idx_tg_alerts_outcome ON telegram_alerts(outcome);
 CREATE INDEX idx_tg_alerts_sent ON telegram_alerts(sent_at);
 CREATE INDEX idx_tg_alerts_engine ON telegram_alerts(engine_id);
+
+-- ─── Engine Budget Persistence (survives Worker cold starts) ─
+CREATE TABLE IF NOT EXISTS engine_budgets (
+  engine_id TEXT PRIMARY KEY,
+  budget REAL NOT NULL,
+  on_probation INTEGER NOT NULL DEFAULT 0,
+  original_budget REAL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
