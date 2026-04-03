@@ -193,6 +193,125 @@ export async function composeAlert(
 }
 
 // ═══════════════════════════════════════════════════════════════
+// 6. Trade Validation — Z.AI reviews data quality before execution
+// ═══════════════════════════════════════════════════════════════
+
+const VALIDATE_SYSTEM = `You are Z.AI, the risk validation officer of YMSA. You review trade setups BEFORE execution. Analyze the data quality and respond with EXACTLY this format:
+VERDICT: APPROVE or REJECT
+CONFIDENCE: 0-100
+REASON: one sentence explanation
+
+Only APPROVE if: data sources agree, indicators are consistent, risk:reward is sound, trade aligns with market regime. REJECT if any data looks stale, conflicting, or the setup has poor risk management. Be strict — false positives cost real money.`;
+
+export interface ZAiValidation {
+  verdict: 'APPROVE' | 'REJECT' | 'UNAVAILABLE';
+  confidence: number;
+  reason: string;
+}
+
+export async function validateTradeSetup(
+  ai: any,
+  trade: MergedTradeInfo,
+  regime: MarketRegime | null,
+  dataQuality: { overallScore: number; failCount: number; issues: string[] },
+): Promise<ZAiValidation> {
+  if (!ai) return { verdict: 'UNAVAILABLE', confidence: 0, reason: 'Z.AI not available' };
+
+  const regimeCtx = regime
+    ? `Regime: ${regime.regime}, VIX ${regime.vix.toFixed(0)}, ADX ${regime.adx?.toFixed(0) ?? '?'}, conf ${regime.confidence}%.`
+    : 'Regime: unknown.';
+
+  const prompt = `TRADE SETUP TO VALIDATE:
+${trade.direction} ${trade.symbol} at $${trade.entry.toFixed(2)}
+Engines: ${trade.engines.join(', ')} (${trade.engines.length} engines)
+Confidence: ${trade.confidence}/100
+SL: $${trade.stopLoss.toFixed(2)}, TP1: $${trade.tp1.toFixed(2)}
+R:R: ${trade.stopLoss !== trade.entry ? (Math.abs(trade.tp1 - trade.entry) / Math.abs(trade.entry - trade.stopLoss)).toFixed(2) : 'N/A'}
+Conflicting engines: ${trade.conflicting ? 'YES' : 'NO'}
+${regimeCtx}
+
+DATA QUALITY REPORT:
+Overall score: ${dataQuality.overallScore}/100
+Critical issues: ${dataQuality.failCount}
+${dataQuality.issues.length > 0 ? 'Issues:\n' + dataQuality.issues.slice(0, 5).map(i => `- ${i}`).join('\n') : 'No issues found.'}
+
+Reasons: ${trade.reasons.slice(0, 3).join(' | ')}`;
+
+  const raw = await runLLM(ai, VALIDATE_SYSTEM, prompt);
+  if (!raw) return { verdict: 'UNAVAILABLE', confidence: 0, reason: 'Z.AI returned empty response' };
+
+  // Parse structured response
+  const verdictMatch = raw.match(/VERDICT:\s*(APPROVE|REJECT)/i);
+  const confMatch = raw.match(/CONFIDENCE:\s*(\d+)/i);
+  const reasonMatch = raw.match(/REASON:\s*(.+)/i);
+
+  const verdict = verdictMatch ? verdictMatch[1].toUpperCase() as 'APPROVE' | 'REJECT' : 'REJECT';
+  const confidence = confMatch ? Math.min(100, Math.max(0, parseInt(confMatch[1], 10))) : 0;
+  const reason = reasonMatch ? reasonMatch[1].trim() : raw.substring(0, 100);
+
+  return { verdict, confidence, reason };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 7. Data Anomaly Detection — Z.AI spots suspicious patterns
+// ═══════════════════════════════════════════════════════════════
+
+const ANOMALY_SYSTEM = `You are Z.AI, a data quality analyst. Given market data for a stock, identify anomalies. Respond with:
+ANOMALIES: number found (0 if none)
+For each anomaly:
+- TYPE: STALE_DATA | PRICE_MISMATCH | VOLUME_ANOMALY | INDICATOR_CONFLICT | REGIME_MISMATCH
+- DETAIL: brief explanation
+Be concise. If data looks normal, say ANOMALIES: 0.`;
+
+export interface DataAnomaly {
+  type: string;
+  detail: string;
+}
+
+export async function detectDataAnomalies(
+  ai: any,
+  symbol: string,
+  data: {
+    price: number;
+    volume: number;
+    avgVolume: number;
+    rsi?: number;
+    macd?: number;
+    atr?: number;
+    ema50?: number;
+    ema200?: number;
+    regime?: string;
+    vix?: number;
+    changePercent: number;
+  },
+): Promise<DataAnomaly[]> {
+  if (!ai) return [];
+
+  const prompt = `${symbol} data snapshot:
+Price: $${data.price.toFixed(2)}, Change: ${data.changePercent >= 0 ? '+' : ''}${data.changePercent.toFixed(2)}%
+Volume: ${data.volume.toLocaleString()} (avg: ${data.avgVolume.toLocaleString()}, ratio: ${data.avgVolume > 0 ? (data.volume / data.avgVolume).toFixed(1) : '?'}x)
+RSI: ${data.rsi?.toFixed(1) ?? 'N/A'}, MACD: ${data.macd?.toFixed(4) ?? 'N/A'}, ATR: ${data.atr?.toFixed(2) ?? 'N/A'}
+EMA50: ${data.ema50 ? '$' + data.ema50.toFixed(2) : 'N/A'}, EMA200: ${data.ema200 ? '$' + data.ema200.toFixed(2) : 'N/A'}
+Regime: ${data.regime ?? 'N/A'}, VIX: ${data.vix?.toFixed(1) ?? 'N/A'}`;
+
+  const raw = await runLLM(ai, ANOMALY_SYSTEM, prompt);
+  if (!raw) return [];
+
+  const anomalies: DataAnomaly[] = [];
+  const typeMatches = raw.matchAll(/TYPE:\s*(\S+)/gi);
+  const detailMatches = raw.matchAll(/DETAIL:\s*(.+)/gi);
+
+  const types = [...typeMatches].map(m => m[1]);
+  const details = [...detailMatches].map(m => m[1].trim());
+
+  for (let i = 0; i < types.length; i++) {
+    anomalies.push({ type: types[i], detail: details[i] ?? 'No detail' });
+  }
+
+  return anomalies;
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Check if Z.AI is available
 // ═══════════════════════════════════════════════════════════════
 

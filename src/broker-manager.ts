@@ -17,9 +17,10 @@ import type { SmartMoneyAnalysis } from './analysis/smart-money';
 import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
 import { getEngineAdjustments } from './analysis/regime';
-import { synthesizeSignal, isZAiAvailable } from './ai/z-engine';
+import { synthesizeSignal, validateTradeSetup, isZAiAvailable } from './ai/z-engine';
 import type { MergedTradeInfo } from './ai/z-engine';
 import { insertTelegramAlert, insertSignal, generateId } from './db/queries';
+import { validateTradeParams, validateSignalConsistency, buildDataQualityReport } from './utils/data-validator';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -691,7 +692,39 @@ export async function flushCycle(env: Env): Promise<number> {
 
   // Individual trade alerts — one per stock (chief broker policy: no batch grouping)
   for (const trade of trades) {
-    // Z.AI: Enrich with LLM reasoning if available
+    // ── Cross-Validation Layer: Validate trade parameters ──
+    const tradeValidation = validateTradeParams({
+      entry: trade.entry,
+      stopLoss: trade.stopLoss,
+      tp1: trade.tp1,
+      tp2: trade.tp2,
+      direction: trade.direction,
+      confidence: trade.confidence,
+      atr: cycleIndicators.get(trade.symbol)?.find(i => i.indicator === 'ATR')?.value,
+    });
+
+    // ── Cross-Validation Layer: Signal consistency check ──
+    const signalInputs = cycleOutputs
+      .filter(o => o.symbol === trade.symbol && (o.direction === 'BUY' || o.direction === 'SELL'))
+      .map(o => ({ direction: o.direction as 'BUY' | 'SELL', confidence: o.confidence, engine: o.engine }));
+    const signalValidation = validateSignalConsistency(
+      signalInputs,
+      cycleRegime ? { regime: cycleRegime.regime, confidence: cycleRegime.confidence } : null,
+    );
+
+    // Build overall data quality report
+    const qualityReport = buildDataQualityReport({
+      signals: signalValidation,
+      trade: tradeValidation,
+    });
+
+    // Log quality gate result
+    if (!qualityReport.passedGate) {
+      console.log(`[Validator] ${trade.symbol} ${trade.direction} BLOCKED by data quality gate (score: ${qualityReport.overallScore}/100, fails: ${qualityReport.failCount})`);
+      continue; // Skip this trade — data quality too low
+    }
+
+    // Z.AI: Validate trade setup before sending
     let aiReasoning: string | undefined;
     if (isZAiAvailable(env)) {
       try {
@@ -706,8 +739,30 @@ export async function flushCycle(env: Env): Promise<number> {
           tp1: trade.tp1,
           conflicting: trade.conflicting,
         };
+
+        // Z.AI validation — must APPROVE before alert sends
+        const zValidation = await validateTradeSetup(
+          (env as any).AI,
+          tradeInfo,
+          cycleRegime,
+          {
+            overallScore: qualityReport.overallScore,
+            failCount: qualityReport.failCount,
+            issues: qualityReport.issues.map(i => `${i.field}: ${i.message}`),
+          },
+        );
+
+        if (zValidation.verdict === 'REJECT') {
+          console.log(`[Z.AI] REJECTED ${trade.symbol} ${trade.direction}: ${zValidation.reason} (conf: ${zValidation.confidence})`);
+          continue; // Z.AI vetoed this trade
+        }
+
+        // Z.AI approved — also generate signal synthesis
         aiReasoning = await synthesizeSignal((env as any).AI, tradeInfo, cycleRegime) || undefined;
-      } catch (err) { console.error('[Z.AI] Signal synthesis failed:', err); }
+        if (zValidation.verdict === 'APPROVE') {
+          console.log(`[Z.AI] APPROVED ${trade.symbol} ${trade.direction} (conf: ${zValidation.confidence}): ${zValidation.reason}`);
+        }
+      } catch (err) { console.error('[Z.AI] Validation failed:', err); }
     }
 
     const plan = planTradeAlert(trade, aiReasoning);

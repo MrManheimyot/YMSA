@@ -26,8 +26,9 @@ import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
 import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades, getPendingTelegramAlerts, updateTelegramAlertOutcome, expireOldTelegramAlerts } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, pushStatArb, pushCryptoDefi, pushEventDriven, pushOptions, sendRiskAlert, sendExecutionAlert } from './broker-manager';
-import { scoreNewsSentiment, weeklyNarrative, isZAiAvailable } from './ai/z-engine';
+import { scoreNewsSentiment, weeklyNarrative, detectDataAnomalies, isZAiAvailable } from './ai/z-engine';
 import { createSimulatedTrades, resolveSimulatedTrades, recordSimulatedDailyPnl, syncMissingOutcomes } from './execution/simulator';
+import { validateQuote, validateIndicators, validateEnvThresholds } from './utils/data-validator';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -639,6 +640,12 @@ async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
   const watchlist = getWatchlist(env);
   let totalSignals = 0;
 
+  // ── Cross-Validation: Verify environment thresholds once per scan ──
+  const envValidation = validateEnvThresholds(env as unknown as Record<string, string | undefined>);
+  if (!envValidation.valid) {
+    console.warn(`[Validator] Env threshold issues (${envValidation.issues.length}): ${envValidation.issues.map(i => i.message).join('; ')}`);
+  }
+
   for (const symbol of watchlist) {
     const [quote, ohlcv] = await Promise.all([
       yahooFinance.getQuote(symbol),
@@ -647,7 +654,49 @@ async function runStockTechnicalScan(env: Env, label: string): Promise<void> {
 
     if (!quote) continue;
 
+    // ── Cross-Validation Layer 1: Quote structural validation ──
+    const quoteValidation = validateQuote(quote, 'yahoo_finance');
+    if (!quoteValidation.valid) {
+      console.warn(`[Validator] ${symbol} quote FAILED validation: ${quoteValidation.issues.filter(i => i.severity === 'FAIL').map(i => i.message).join('; ')}`);
+      continue; // Skip this symbol — unreliable data
+    }
+    if (quoteValidation.score < 70) {
+      console.warn(`[Validator] ${symbol} quote quality low (${quoteValidation.score}/100): ${quoteValidation.issues.map(i => i.message).join('; ')}`);
+    }
+
     const indicators = computeIndicators(symbol, ohlcv);
+
+    // ── Cross-Validation Layer 2: Indicator consistency check ──
+    const indicatorValidation = validateIndicators(indicators, symbol);
+    if (indicatorValidation.missingCritical.length > 0) {
+      console.warn(`[Validator] ${symbol} missing critical indicators: ${indicatorValidation.missingCritical.join(', ')} — signals degraded`);
+    }
+
+    // ── Cross-Validation Layer 3: Z.AI anomaly detection (sampled) ──
+    if (isZAiAvailable(env) && Math.random() < 0.15) { // Sample 15% of stocks to conserve AI quota
+      try {
+        const rsi = indicators.find(i => i.indicator === 'RSI');
+        const macd = indicators.find(i => i.indicator === 'MACD');
+        const atr = indicators.find(i => i.indicator === 'ATR');
+        const ema50 = indicators.find(i => i.indicator === 'EMA_50');
+        const ema200 = indicators.find(i => i.indicator === 'EMA_200');
+        const anomalies = await detectDataAnomalies((env as any).AI, symbol, {
+          price: quote.price,
+          volume: quote.volume,
+          avgVolume: quote.avgVolume,
+          rsi: rsi?.value,
+          macd: macd?.value,
+          atr: atr?.value,
+          ema50: ema50?.value,
+          ema200: ema200?.value,
+          changePercent: quote.changePercent,
+        });
+        if (anomalies.length > 0) {
+          console.warn(`[Z.AI] ${symbol} anomalies detected: ${anomalies.map(a => `${a.type}: ${a.detail}`).join('; ')}`);
+        }
+      } catch (err) { /* Z.AI anomaly check is best-effort */ }
+    }
+
     const fibonacci = ohlcv.length > 0 ? calculateFibonacci(symbol, ohlcv, quote.price) : null;
     const signals = detectSignals(quote, indicators, fibonacci, env);
 
