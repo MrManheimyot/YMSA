@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-03 (commit 2d63cde)
+> Last updated: 2026-04-03 (commit 50e200d)
 
 ---
 
@@ -24,7 +24,7 @@
 | **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
 | **Worker URL** | `https://ymsa-financial-automation.kuki-25d.workers.dev` |
 | **Repo** | `MrManheimyot/YMSA` (branch: `master`) |
-| **Tests** | 78 tests (Vitest) across 4 files — signals, risk-controller, z-engine, data-validator |
+| **Tests** | 110 tests (Vitest) across 5 files — signals, risk-controller, z-engine, data-validator, stress-test |
 
 ---
 
@@ -198,6 +198,9 @@ YMSA/
     │   ├── risk-controller.ts    # ⚠️ DETERMINISTIC hard rules — NOT AI (DO NOT CHANGE LIGHTLY)
     │   └── pairs-trading.ts      # Stat-arb: correlation, z-score, cointegration, half-life
     │
+    ├── backtesting/              # 📈 Backtesting Engine (P1)
+    │   └── engine.ts            # Walk-forward historical backtest: OHLCV → signals → simulated trades → metrics (win rate, Sharpe, profit factor, drawdown, expectancy)
+    │
     ├── utils/                    # 🛠️ Utility modules
     │   ├── data-validator.ts     # 7-layer cross-validation framework: quote, indicator, cross-source, signal, trade param, env, aggregate
     │   ├── env-validator.ts      # Environment variable validation
@@ -208,11 +211,12 @@ YMSA/
     │   ├── finviz.ts             # RSI oversold stocks, 52W highs (Playwright)
     │   └── google-finance.ts     # Market overview scraper (Playwright)
     │
-    └── __tests__/                # 🧪 Vitest test suite (78 tests)
+    └── __tests__/                # 🧪 Vitest test suite (110 tests)
         ├── signals.test.ts       # 7 tests: RSI, volume, 52W, score calculation
         ├── risk-controller.test.ts # 6 tests: Kill switch, drawdown, position size, limits
         ├── z-engine.test.ts      # 30 tests: synthesize, sentiment, review, narrative, compose, availability
-        └── data-validator.test.ts # 35 tests: quote, indicator, trade params, signal consistency, cross-validate, env thresholds, quality report
+        ├── data-validator.test.ts # 35 tests: quote, indicator, trade params, signal consistency, cross-validate, env thresholds, quality report
+        └── stress-test.test.ts   # 32 tests (P4): flash crash, VIX spike, correlation breakdown, budget overrun, position limits, kill switch tiers, combined crisis
 ```
 
 ---
@@ -309,6 +313,8 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 | `GET` | `/api/daily-pnl` | Daily P&L history |
 | `GET` | `/api/test-alert` | Send test alert to Telegram |
 | `GET` | `/api/trigger?job=morning` | Manually trigger a cron job |
+| `POST` | `/api/backtest` | Run historical backtest (P1) — accepts JSON config, returns metrics + equity curve |
+| `GET` | `/api/ai-health` | Z.AI health stats (P6) — failure rate, approval/rejection bias, alerts |
 
 **Auth**: Pass `X-API-Key` header or `?key=` query param. Only enforced if `YMSA_API_KEY` secret is set.
 
@@ -379,7 +385,7 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 ### Support: Z.AI — LLM Intelligence (`src/ai/z-engine.ts`)
 - Model: `@cf/meta/llama-3.1-8b-instruct` via Cloudflare Workers AI (free tier)
 - Config: max_tokens=300, temperature=0.3
-- **7 functions**:
+- **7 LLM functions**:
   1. `synthesizeSignal()` → 2-sentence trade rationale (<150 chars)
   2. `scoreNewsSentiment()` → BULLISH/BEARISH/NEUTRAL per headline + confidence + symbols
   3. `reviewTrade()` → Post-close P&L analysis (was signal correct? lessons?)
@@ -387,6 +393,15 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
   5. `composeAlert()` → Batch multi-signal alert (<800 chars, mobile-friendly, HTML)
   6. `validateTradeSetup()` → Pre-trade gate: APPROVE/REJECT verdict with confidence + reason (added commit `2d63cde`)
   7. `detectDataAnomalies()` → TYPE: STALE_DATA | PRICE_MISMATCH | VOLUME_ANOMALY | INDICATOR_CONFLICT | REGIME_MISMATCH (added commit `2d63cde`)
+- **P6: Health Monitoring** (added commit `50e200d`):
+  - `recordZAiCall(success, responseLength)` — tracks every LLM call
+  - `recordValidationResult(verdict)` — tracks APPROVE/REJECT/UNAVAILABLE distribution
+  - `getZAiHealthStats()` — returns failure rate, approval/rejection bias, alerts
+  - `formatZAiHealthReport()` — Telegram-formatted health report
+  - `resetZAiHealthStats()` — resets counters (called at start of overnight cycle)
+  - **Alert thresholds**: >10% failure rate, >95% approval (rubber-stamping), >80% rejection (over-conservative)
+  - Integrated: `broker-manager.ts` records each validation call, overnight cron sends report
+  - Endpoint: `GET /api/ai-health`
 - Graceful degradation: all functions return empty/safe defaults when AI unavailable
 
 ### Support: Broker Manager (`src/broker-manager.ts`)
@@ -412,7 +427,7 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 - Pre-flight risk checks (min strength 60, equity check)
 - Records every signal + trade in D1
 - Default risk limits: 8 max positions, 15 daily trades, 10% max position, 6% portfolio risk
-- Engine budgets: MTF 30%, SMC 20%, STAT_ARB 20%, OPTIONS 10%, CRYPTO 10%, EVENT 10%
+- Engine budgets: MTF 30%, SMC 20%, STAT_ARB 20%, OPTIONS 10%, CRYPTO 10%, EVENT 10% (now dynamically rebalanced — see P3 below)
 - **Position limits enforced** (commit `6631c25`): maxOpen=8 and maxDaily=15 now checked via D1 queries (`getOpenTrades`, `getRecentTrades`) before execution — previously declared but never enforced
 - **Contradictory position blocking** (commit `6631c25`): No BUY+SELL on same symbol — checks existing open trades before placing
 - **Dynamic win rate** (commit `6631c25`): Win rate computed from last 50 closed trades (clamped 30%-80%, fallback 0.55) instead of hardcoded 0.55
@@ -447,6 +462,19 @@ Added commit `2d63cde`. Ensures all data entering the pipeline is structurally s
 - Daily P&L recording to D1 (end-of-day)
 - Per-engine performance tracking
 
+### Support: Backtesting Engine — P1 (`src/backtesting/engine.ts`, added commit `50e200d`)
+- Walk-forward historical simulation using Yahoo Finance OHLCV data
+- `runBacktest(env, config)` — main entry point
+- Default: last 6 months, all watchlist symbols, $100K initial capital
+- Uses same `detectSignals()` + `computeIndicators()` as live pipeline
+- Simulated trade flow: signal → next bar open entry → SL/TP/20-bar max hold exit
+- 2% of capital per trade position sizing
+- **Metrics**: win rate, profit factor, Sharpe ratio (annualized), max drawdown, expectancy, avg win/loss, consecutive wins/losses, largest win/loss, avg holding days
+- **Per-engine breakdown**: `computeByEngine()` maps signals to engines via `mapSignalToEngine()`
+- **Equity curve**: date + equity snapshots for charting
+- `formatBacktestReport()` — Telegram-formatted report
+- Endpoint: `POST /api/backtest` — accepts JSON config, returns metrics + equity curve + per-engine breakdown
+
 ---
 
 ## 🛡️ Risk Controller Rules (`src/agents/risk-controller.ts`)
@@ -464,6 +492,23 @@ These are **HARD-CODED DETERMINISTIC** rules. They are NOT AI-powered. No agent 
 | Daily Loss Limit | **$5,000** | Absolute dollar loss limit per day |
 | Max Correlation | **0.85** | No two positions with r > 0.85 |
 | Min Liquidity | **1%** | Position must be < 1% of daily volume |
+
+### P3: Dynamic Engine Budgets (added commit `50e200d`)
+- `rebalanceEngineBudgets(db)` — Monthly auto-rebalance based on rolling 30-day performance
+- Composite score per engine: win rate (40%), profit factor (30%), activity (30%)
+- **Floor**: 5% minimum per engine | **Ceiling**: 40% maximum per engine
+- Normalizes to sum 1.0 after clamping; only reports ≥1% changes
+- `formatBudgetRebalance()` — Telegram report of changes
+- Integrated into `runMonthlyPerformance()` in cron-handler.ts
+
+### P5: Engine Probation System (added commit `50e200d`)
+- `evaluateEngineProbation(db)` — Daily check during overnight setup
+- **Trigger**: 0 wins with ≥5 closed trades in 30 days → budget reduced to 5%
+- **Recovery**: 5 consecutive wins OR win rate >40% with ≥10 trades → budget restored
+- In-memory `probationState` tracks original budget and consecutive wins per engine
+- `isOnProbation(engineId)` — Quick check for other modules
+- `formatProbationReport()` — Telegram alert on probation changes
+- Integrated into `runOvernightSetup()` in cron-handler.ts
 
 ---
 
@@ -845,6 +890,7 @@ The evening summary only shows updates for:
 | 2026-04-03 | `6631c25` | **6 Critical Trading Fixes** — Event Driven R:R 0.80→2.25, Options R:R 1.33→2.33, simulator confidence ≥85 gate, position limits enforced (maxOpen=8, maxDaily=15), contradictory position blocking, dynamic win rate from trade history |
 | 2026-04-03 | `46b2158` | **Owner Report** — OWNER-REPORT-2025-07-14.md: structured brokers' meeting, senior audit, 6 root causes, 6 fixes, validation, recommendations |
 | 2026-04-03 | `2d63cde` | **Cross-Validation Layer** — 7-layer data-validator.ts (~550 lines), Z.AI validateTradeSetup() APPROVE/REJECT gate, Z.AI detectDataAnomalies(), integrated into cron-handler + broker-manager, 35 new tests (78 total) |
+| 2026-04-03 | `50e200d` | **5 Institutional Gaps Fixed (P1/P3/P4/P5/P6)** — Backtesting engine (walk-forward historical simulation with Sharpe, profit factor, win rate, drawdown, expectancy), dynamic engine budget rebalancing (monthly, performance-based, 5-40% range), stress testing suite (32 tests across 9 scenarios), engine probation system (0 wins/5+ trades → 5% budget), Z.AI health monitoring (failure rate, approval/rejection bias alerts). 110 tests (5 files). New endpoints: POST /api/backtest, GET /api/ai-health |
 
 ---
 
@@ -967,7 +1013,7 @@ Feeds are parsed via regex-based Atom XML parsing (no external XML library neede
 
 ## 🧪 Test Suite (`src/__tests__/`)
 
-**Framework**: Vitest ^3.0.0 | **Total**: 78 tests | **All passing**
+**Framework**: Vitest ^3.0.0 | **Total**: 110 tests | **All passing**
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -975,6 +1021,7 @@ Feeds are parsed via regex-based Atom XML parsing (no external XML library neede
 | `risk-controller.test.ts` | 6 | Kill switch, daily drawdown, position size, loss limit, custom limits |
 | `z-engine.test.ts` | 30 | synthesizeSignal, scoreNewsSentiment, reviewTrade, weeklyNarrative, composeAlert, isZAiAvailable, error handling, edge cases |
 | `data-validator.test.ts` | 35 | validateQuote (8), validateIndicators (6), validateTradeParams (6), validateSignalConsistency (4), crossValidateQuotes (4), validateEnvThresholds (4), buildDataQualityReport (3) |
+| `stress-test.test.ts` | 32 | Flash crash (6), VIX spike (5), correlation breakdown (3), engine budget (4), position limits (2), exposure cap (2), kill switch tiers (8), combined crisis (1), sector concentration (1) |
 
 ### Running Tests
 ```powershell
@@ -993,6 +1040,7 @@ node .\node_modules\vitest\vitest.mjs run
 - ✅ Z.AI LLM integration for signal reasoning
 
 ### Still Planned
+- [ ] Backtest UI in dashboard (currently API-only via POST /api/backtest)
 - [ ] R2 Bucket for historical data storage (backtest datasets)
 - [ ] Durable Objects for persistent orchestrator state across invocations
 - [ ] Full ADF cointegration test (replace variance ratio proxy)
