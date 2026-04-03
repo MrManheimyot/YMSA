@@ -22,11 +22,11 @@ import { detectRegime, getEngineAdjustments, formatRegimeAlert } from './analysi
 import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from './api/google-alerts';
 import { recordDailyPnl, getPortfolioSnapshot, formatPortfolioSnapshot, recordEnginePerformance, getPerformanceMetrics, formatPerformanceReport } from './execution/portfolio';
 import { executeBatch, formatBatchResults, type ExecutableSignal } from './execution/engine';
-import { evaluateKillSwitch, formatRiskEvent } from './agents/risk-controller';
+import { evaluateKillSwitch, formatRiskEvent, rebalanceEngineBudgets, formatBudgetRebalance, evaluateEngineProbation, formatProbationReport } from './agents/risk-controller';
 import { insertRiskEvent, generateId, getClosedTradesSince, getOpenTrades, getPendingTelegramAlerts, updateTelegramAlertOutcome, expireOldTelegramAlerts } from './db/queries';
 import { setCurrentRegime } from './alert-formatter';
 import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, pushStatArb, pushCryptoDefi, pushEventDriven, pushOptions, sendRiskAlert, sendExecutionAlert } from './broker-manager';
-import { scoreNewsSentiment, weeklyNarrative, detectDataAnomalies, isZAiAvailable } from './ai/z-engine';
+import { scoreNewsSentiment, weeklyNarrative, detectDataAnomalies, isZAiAvailable, getZAiHealthStats, resetZAiHealthStats, formatZAiHealthReport } from './ai/z-engine';
 import { createSimulatedTrades, resolveSimulatedTrades, recordSimulatedDailyPnl, syncMissingOutcomes } from './execution/simulator';
 import { validateQuote, validateIndicators, validateEnvThresholds } from './utils/data-validator';
 
@@ -1700,6 +1700,32 @@ async function runOvernightSetup(env: Env): Promise<void> {
     await recordSimulatedDailyPnl(env);
   } catch (e) { console.error('[Simulator] Overnight cycle error:', e); }
 
+  // ── P5: Engine Probation Check ──
+  if (env.DB) {
+    try {
+      const probations = await evaluateEngineProbation(env.DB);
+      if (probations.length > 0) {
+        const report = formatProbationReport(probations);
+        if (report) await sendTelegramMessage(report, env);
+        console.log(`[Overnight] Probation update: ${probations.length} engines evaluated`);
+      }
+    } catch (e) { console.error('[Overnight] Probation check error:', e); }
+  }
+
+  // ── P6: Z.AI Health Report ──
+  try {
+    const health = getZAiHealthStats();
+    if (health.totalCalls > 0) {
+      const healthReport = formatZAiHealthReport(health);
+      // Only send if there are alerts or significant activity
+      if (health.alerts.length > 0 || health.totalCalls >= 5) {
+        await sendTelegramMessage(healthReport, env);
+      }
+      console.log(`[Overnight] Z.AI health: ${health.successfulCalls}/${health.totalCalls} calls OK, ${health.alerts.length} alerts`);
+    }
+    resetZAiHealthStats();
+  } catch (e) { console.error('[Overnight] Z.AI health report error:', e); }
+
   // ── Auto-resolve PENDING Telegram alerts ──
   if (env.DB) {
     try {
@@ -1835,6 +1861,16 @@ async function runMonthlyPerformance(env: Env): Promise<void> {
   const snapshot = await getPortfolioSnapshot(env);
   if (snapshot) {
     await sendTelegramMessage(formatPortfolioSnapshot(snapshot), env);
+  }
+
+  // ── P3: Dynamic Engine Budget Rebalance (monthly) ──
+  if (env.DB) {
+    try {
+      const changes = await rebalanceEngineBudgets(env.DB);
+      const report = formatBudgetRebalance(changes);
+      await sendTelegramMessage(report, env);
+      console.log(`[Monthly] Budget rebalance: ${changes.length} engines adjusted`);
+    } catch (e) { console.error('[Monthly] Budget rebalance error:', e); }
   }
 
   console.log('[v3] Monthly performance report sent');

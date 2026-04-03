@@ -17,7 +17,7 @@ import type { SmartMoneyAnalysis } from './analysis/smart-money';
 import type { MTFSignal } from './analysis/multi-timeframe';
 import type { MarketRegime } from './analysis/regime';
 import { getEngineAdjustments } from './analysis/regime';
-import { synthesizeSignal, validateTradeSetup, isZAiAvailable } from './ai/z-engine';
+import { synthesizeSignal, validateTradeSetup, isZAiAvailable, recordZAiCall, recordValidationResult } from './ai/z-engine';
 import type { MergedTradeInfo } from './ai/z-engine';
 import { insertTelegramAlert, insertSignal, generateId } from './db/queries';
 import { validateTradeParams, validateSignalConsistency, buildDataQualityReport } from './utils/data-validator';
@@ -751,6 +751,10 @@ export async function flushCycle(env: Env): Promise<number> {
             issues: qualityReport.issues.map(i => `${i.field}: ${i.message}`),
           },
         );
+
+        // P6: Track Z.AI health
+        recordZAiCall(zValidation.verdict !== 'UNAVAILABLE', zValidation.reason?.length || 0);
+        recordValidationResult(zValidation.verdict);
 
         if (zValidation.verdict === 'REJECT') {
           console.log(`[Z.AI] REJECTED ${trade.symbol} ${trade.direction}: ${zValidation.reason} (conf: ${zValidation.confidence})`);

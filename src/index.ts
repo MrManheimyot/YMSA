@@ -353,6 +353,27 @@ export default {
         return jsonResponse(regime);
       }
 
+      // ─── Backtest (P1) ─────────────────────────────
+      if (path === '/api/backtest' && request.method === 'POST') {
+        const { runBacktest, formatBacktestReport } = await import('./backtesting/engine');
+        const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+        const result = await runBacktest(env, body as any);
+        return jsonResponse({
+          report: formatBacktestReport(result),
+          metrics: result.metrics,
+          byEngine: result.byEngine,
+          tradeCount: result.trades.length,
+          equityCurve: result.equityCurve,
+        }, 200, corsHeaders);
+      }
+
+      // ─── Z.AI Health (P6) ─────────────────────────
+      if (path === '/api/ai-health') {
+        const { getZAiHealthStats } = await import('./ai/z-engine');
+        const stats = getZAiHealthStats();
+        return jsonResponse(stats, 200, corsHeaders);
+      }
+
       // ─── Risk Events ──────────────────────────────
       if (path === '/api/risk-events') {
         const events = await getRecentRiskEvents(env.DB!, 20);

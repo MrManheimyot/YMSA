@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-02 (commit b0abd36)
+> Last updated: 2026-04-03 (commit 2d63cde)
 
 ---
 
@@ -24,7 +24,7 @@
 | **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
 | **Worker URL** | `https://ymsa-financial-automation.kuki-25d.workers.dev` |
 | **Repo** | `MrManheimyot/YMSA` (branch: `master`) |
-| **Tests** | 43 tests (Vitest) across 3 files — signals, risk-controller, z-engine |
+| **Tests** | 78 tests (Vitest) across 4 files — signals, risk-controller, z-engine, data-validator |
 
 ---
 
@@ -140,6 +140,7 @@ YMSA/
 ├── setup.ps1                     # 🪟 Windows PowerShell setup (git, gh, deploy)
 ├── README.md                     # 📖 User-facing readme
 ├── MEMORY-JOURNAL.md             # 🧠 THIS FILE — system memory for AI assistants
+├── OWNER-REPORT-2025-07-14.md    # 📋 Owner report: brokers' meeting, 6 fixes, recommendations
 ├── _check.bat                    # 🔍 Quick audit script
 │
 ├── config/
@@ -183,12 +184,13 @@ YMSA/
     │   └── regime.ts             # Market Regime: TRENDING_UP/DOWN/RANGING/VOLATILE + engine weights
     │
     ├── execution/                # 🚀 Trade execution pipeline
-    │   ├── engine.ts             # Alpaca bracket orders, Kelly sizing, risk pre-flight
+    │   ├── engine.ts             # Alpaca bracket orders, Kelly sizing, risk pre-flight, position limits, contradictory blocking, dynamic win rate
+    │   ├── simulator.ts          # Paper trade simulator: confidence ≥85 gate, contradictory blocking, SL/TP resolution
     │   └── portfolio.ts          # Portfolio snapshots, Sharpe, drawdown, daily P&L recording
     │
     ├── db/                       # 💾 D1 database layer
-    │   ├── schema.sql            # 10 tables: trades, positions, signals, daily_pnl, etc.
-    │   └── queries.ts            # 20+ CRUD functions for all tables
+    │   ├── schema.sql            # 11 tables: trades, positions, signals, daily_pnl, telegram_alerts, etc.
+    │   └── queries.ts            # 29+ CRUD functions for all tables
     │
     ├── agents/                   # 🤖 Multi-agent system
     │   ├── types.ts              # Agent types: AgentId, AgentSignal, PortfolioState
@@ -196,14 +198,21 @@ YMSA/
     │   ├── risk-controller.ts    # ⚠️ DETERMINISTIC hard rules — NOT AI (DO NOT CHANGE LIGHTLY)
     │   └── pairs-trading.ts      # Stat-arb: correlation, z-score, cointegration, half-life
     │
+    ├── utils/                    # 🛠️ Utility modules
+    │   ├── data-validator.ts     # 7-layer cross-validation framework: quote, indicator, cross-source, signal, trade param, env, aggregate
+    │   ├── env-validator.ts      # Environment variable validation
+    │   ├── logger.ts             # Structured logging utility
+    │   └── retry.ts              # Retry with exponential backoff
+    │
     ├── scrapers/                 # 🕷️ Browser-based scrapers (requires BROWSER binding)
     │   ├── finviz.ts             # RSI oversold stocks, 52W highs (Playwright)
     │   └── google-finance.ts     # Market overview scraper (Playwright)
     │
-    └── __tests__/                # 🧪 Vitest test suite (43 tests)
+    └── __tests__/                # 🧪 Vitest test suite (78 tests)
         ├── signals.test.ts       # 7 tests: RSI, volume, 52W, score calculation
         ├── risk-controller.test.ts # 6 tests: Kill switch, drawdown, position size, limits
-        └── z-engine.test.ts      # 30 tests: synthesize, sentiment, review, narrative, compose, availability
+        ├── z-engine.test.ts      # 30 tests: synthesize, sentiment, review, narrative, compose, availability
+        └── data-validator.test.ts # 35 tests: quote, indicator, trade params, signal consistency, cross-validate, env thresholds, quality report
 ```
 
 ---
@@ -370,12 +379,14 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 ### Support: Z.AI — LLM Intelligence (`src/ai/z-engine.ts`)
 - Model: `@cf/meta/llama-3.1-8b-instruct` via Cloudflare Workers AI (free tier)
 - Config: max_tokens=300, temperature=0.3
-- **5 functions**:
+- **7 functions**:
   1. `synthesizeSignal()` → 2-sentence trade rationale (<150 chars)
   2. `scoreNewsSentiment()` → BULLISH/BEARISH/NEUTRAL per headline + confidence + symbols
   3. `reviewTrade()` → Post-close P&L analysis (was signal correct? lessons?)
   4. `weeklyNarrative()` → 3-5 bullet weekly summary (winners, losers, regime, watchlist)
   5. `composeAlert()` → Batch multi-signal alert (<800 chars, mobile-friendly, HTML)
+  6. `validateTradeSetup()` → Pre-trade gate: APPROVE/REJECT verdict with confidence + reason (added commit `2d63cde`)
+  7. `detectDataAnomalies()` → TYPE: STALE_DATA | PRICE_MISMATCH | VOLUME_ANOMALY | INDICATOR_CONFLICT | REGIME_MISMATCH (added commit `2d63cde`)
 - Graceful degradation: all functions return empty/safe defaults when AI unavailable
 
 ### Support: Broker Manager (`src/broker-manager.ts`)
@@ -391,6 +402,9 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 - Market context message appended to alerts
 - "Nothing happening" fallback when no signals fire
 - **D1 recording**: Only trade alerts (with `_trade` metadata) get logged to `telegram_alerts`. Market context / no-signals messages are sent to Telegram but not logged
+- **Cross-Validation Gate** (added commit `2d63cde`): Before any trade alert sends in `flushCycle()`, 3 validation layers run: (1) `validateTradeParams()` — R:R, direction, confidence checks, (2) `validateSignalConsistency()` — detects conflicting signals, (3) `buildDataQualityReport()` — weighted quality score (blocks if <60), (4) Z.AI `validateTradeSetup()` APPROVE/REJECT gate
+- **Event Driven R:R fixed** (commit `6631c25`): SL atr×2, TP atr×4.5 → R:R 2.25 (was 0.80)
+- **Options R:R fixed** (commit `6631c25`): TP atr×3.5 → R:R 2.33 (was 1.33)
 
 ### Support: Execution Engine (`src/execution/engine.ts`)
 - Alpaca paper-mode bracket orders (entry + SL + TP)
@@ -399,6 +413,33 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 - Records every signal + trade in D1
 - Default risk limits: 8 max positions, 15 daily trades, 10% max position, 6% portfolio risk
 - Engine budgets: MTF 30%, SMC 20%, STAT_ARB 20%, OPTIONS 10%, CRYPTO 10%, EVENT 10%
+- **Position limits enforced** (commit `6631c25`): maxOpen=8 and maxDaily=15 now checked via D1 queries (`getOpenTrades`, `getRecentTrades`) before execution — previously declared but never enforced
+- **Contradictory position blocking** (commit `6631c25`): No BUY+SELL on same symbol — checks existing open trades before placing
+- **Dynamic win rate** (commit `6631c25`): Win rate computed from last 50 closed trades (clamped 30%-80%, fallback 0.55) instead of hardcoded 0.55
+
+### Support: Paper Trade Simulator (`src/execution/simulator.ts`)
+- Converts `telegram_alerts` → simulated bracket trades
+- Resolves trades on SL hit (→LOSS) or TP hit (→WIN), stagnant→BREAKEVEN
+- **Confidence gate** (commit `6631c25`): Only alerts with confidence ≥85 are simulated
+- **Contradictory position blocking** (commit `6631c25`): Checks for opposite-direction open positions before creating sim trade
+
+### Support: Data Validator — 7-Layer Cross-Validation (`src/utils/data-validator.ts`)
+Added commit `2d63cde`. Ensures all data entering the pipeline is structurally sound, consistent, and trustworthy.
+
+| Layer | Function | What It Checks |
+|---|---|---|
+| 1 | `validateQuote()` | Price range, NaN, negative, volume, staleness (<24h), 52W consistency |
+| 2 | `validateIndicators()` | RSI [0-100], ATR>0, MACD histogram = MACD−Signal, EMA spread |
+| 3 | `crossValidateQuotes()` | Multi-source price agreement (<1% deviation) |
+| 4 | `validateSignalConsistency()` | Detects conflicting signals on same symbol |
+| 5 | `validateTradeParams()` | R:R≥2.0, SL/TP direction vs trade side, stop distance vs ATR |
+| 6 | `validateEnvThresholds()` | NaN detection, range checks, cross-checks (e.g. RSI oversold < overbought) |
+| 7 | `buildDataQualityReport()` | Weighted aggregate score 0-100 (min 60 to pass, any FAIL blocks) |
+
+- Each layer returns `{ status: 'PASS' | 'WARN' | 'FAIL', issues: string[] }`
+- Integrated into `cron-handler.ts`: quote + indicator + env validation runs on every stock scan
+- Integrated into `broker-manager.ts`: trade param + signal consistency + quality report gate in `flushCycle()`
+- Z.AI `detectDataAnomalies()` sampled 15% of stocks in each scan for stale data, price mismatches, volume anomalies
 
 ### Support: Portfolio Manager (`src/execution/portfolio.ts`)
 - Real-time portfolio snapshot synced with Alpaca
@@ -798,6 +839,12 @@ The evening summary only shows updates for:
 | 2026-04-01 | `d5df5be` | **Fix: All 6 engines route through broker manager** — previously 5/6 engines bypassed broker, sending Telegram directly. Now all push through `pushStatArb`, `pushCryptoDefi`, `pushEventDriven`, `pushOptions` |
 | 2026-04-01 | `3cb46f2` | **Inline D1 signal recording + scan enhancements** — `pushAndRecordSignal()` records signals immediately to D1 (not waiting for flushCycle). Commodity big-move detection (>3%), crypto DEX mover fallback |
 | 2026-04-01 | `fc4e614` | **Live engine signal counts in dashboard** — `/api/engine-stats` merges `engine_performance` table with live signal counts from `signals` table. Engine stats updated after each full scan |
+| 2026-04-02 | `b0abd36` | **Critical P&L fix** — dailyPnl uses Alpaca last_equity, engine-stats live win rates, realized P&L breakdown, Morning Brief v2 |
+| 2026-04-02 | `3b66e69` | **Phase 1 Quality Gates** — ADX gating, anti-trap rules, multi-engine ≥2 requirement, R:R ≥2.0 gate, counter-trend blocking at regime conf ≥70, VIX halt ≥35, Smart Money age decay |
+| 2026-04-02 | `0d5491c` | **MD3 Mobile-First Dashboard** — Converted all CSS to mobile-first with 3 breakpoints (480px, 768px, 1100px). Responsive grid, touch-friendly tables, compact hero metrics |
+| 2026-04-03 | `6631c25` | **6 Critical Trading Fixes** — Event Driven R:R 0.80→2.25, Options R:R 1.33→2.33, simulator confidence ≥85 gate, position limits enforced (maxOpen=8, maxDaily=15), contradictory position blocking, dynamic win rate from trade history |
+| 2026-04-03 | `46b2158` | **Owner Report** — OWNER-REPORT-2025-07-14.md: structured brokers' meeting, senior audit, 6 root causes, 6 fixes, validation, recommendations |
+| 2026-04-03 | `2d63cde` | **Cross-Validation Layer** — 7-layer data-validator.ts (~550 lines), Z.AI validateTradeSetup() APPROVE/REJECT gate, Z.AI detectDataAnomalies(), integrated into cron-handler + broker-manager, 35 new tests (78 total) |
 
 ---
 
@@ -920,13 +967,14 @@ Feeds are parsed via regex-based Atom XML parsing (no external XML library neede
 
 ## 🧪 Test Suite (`src/__tests__/`)
 
-**Framework**: Vitest ^3.0.0 | **Total**: 43 tests | **All passing**
+**Framework**: Vitest ^3.0.0 | **Total**: 78 tests | **All passing**
 
 | File | Tests | Coverage |
 |---|---|---|
 | `signals.test.ts` | 7 | RSI oversold/overbought, volume spike, 52W proximity, score calculation |
 | `risk-controller.test.ts` | 6 | Kill switch, daily drawdown, position size, loss limit, custom limits |
 | `z-engine.test.ts` | 30 | synthesizeSignal, scoreNewsSentiment, reviewTrade, weeklyNarrative, composeAlert, isZAiAvailable, error handling, edge cases |
+| `data-validator.test.ts` | 35 | validateQuote (8), validateIndicators (6), validateTradeParams (6), validateSignalConsistency (4), crossValidateQuotes (4), validateEnvThresholds (4), buildDataQualityReport (3) |
 
 ### Running Tests
 ```powershell
@@ -973,6 +1021,11 @@ node .\node_modules\vitest\vitest.mjs run
 - ✅ **Engine-stats live win rates** — `/api/engine-stats` now computes real-time `win_rate`, `pnl`, `trades_executed` from closed trades per engine instead of stale cron-recorded values (commit `b0abd36`).
 - ✅ **Realized P&L breakdown** — Dashboard daily P&L subtitle now shows `(realized: $X)` when trades closed today. `PortfolioSnapshot` includes `realizedPnlToday` and `lastEquity` fields (commit `b0abd36`).
 - ✅ **Morning Brief v2** — 6 premium sections + KEY INSIGHTS (2-3 data-driven commentary bullets) + WHAT TO WATCH TODAY (earnings, Fed, risks, opportunities). 50-stock tech scan with relaxed thresholds + volume spike indicator (commits `84dab35`, `a09e543`).
+- ✅ **Phase 1 Quality Gates** (commit `3b66e69`) — ADX gating (trend trades need ADX≥20, range trades ADX<25), anti-trap rules (RSI divergence + volume confirmation), multi-engine ≥2 requirement, R:R ≥2.0 gate, counter-trend blocking at regime confidence ≥70, VIX halt when ≥35, Smart Money order block age decay.
+- ✅ **MD3 Mobile-First Dashboard** (commit `0d5491c`) — Converted all CSS from desktop-first to mobile-first. 3 breakpoints (480px, 768px, 1100px). Responsive grid layouts, touch-friendly filter buttons, compact hero metrics, adaptive font sizes.
+- ✅ **6 Critical Trading Defect Fixes** (commit `6631c25`) — (1) Event Driven R:R 0.80→2.25 (SL atr×2, TP atr×4.5), (2) Options R:R 1.33→2.33 (TP atr×3.5), (3) Simulator confidence ≥85 gate, (4) Position limits enforced via D1 queries (maxOpen=8, maxDaily=15), (5) Contradictory position blocking (no BUY+SELL same symbol), (6) Dynamic win rate from last 50 closed trades (clamped 30%-80%).
+- ✅ **Owner Report** (commit `46b2158`) — OWNER-REPORT-2025-07-14.md: structured brokers' morning meeting, senior leadership audit, 6 root causes identified, 6 fixes implemented, validation results, expected impact projections, forward recommendations.
+- ✅ **Cross-Validation Layer** (commit `2d63cde`) — 7-layer `data-validator.ts` (~550 lines): quote structural validation, indicator consistency, cross-source price agreement, signal conflict detection, trade param validation, env threshold checks, aggregate quality scoring (weighted 0-100, min 60 to pass). Z.AI `validateTradeSetup()` APPROVE/REJECT gate before every trade alert. Z.AI `detectDataAnomalies()` sampled 15% of stocks. Integrated into cron-handler (scan-time validation) and broker-manager (pre-send gate). 35 new tests, 78 total passing.
 
 ---
 

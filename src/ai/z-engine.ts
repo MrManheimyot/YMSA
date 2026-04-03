@@ -318,3 +318,150 @@ Regime: ${data.regime ?? 'N/A'}, VIX: ${data.vix?.toFixed(1) ?? 'N/A'}`;
 export function isZAiAvailable(env: Env): boolean {
   return !!(env as any).AI;
 }
+
+// ═══════════════════════════════════════════════════════════════
+// P6: Z.AI HEALTH MONITORING — Track availability + quality
+// ═══════════════════════════════════════════════════════════════
+
+export interface ZAiHealthStats {
+  totalCalls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  failureRate: number;          // 0-1
+  approvals: number;
+  rejections: number;
+  unavailable: number;
+  approvalRate: number;         // 0-1
+  rejectionRate: number;        // 0-1
+  avgResponseLength: number;
+  lastResetAt: number;
+  alerts: string[];             // Warning messages
+}
+
+// In-memory stats — resets each Worker lifecycle (typically per cron cycle)
+const healthStats = {
+  totalCalls: 0,
+  successfulCalls: 0,
+  failedCalls: 0,
+  approvals: 0,
+  rejections: 0,
+  unavailable: 0,
+  responseLengths: [] as number[],
+  lastResetAt: Date.now(),
+};
+
+/**
+ * Record a Z.AI LLM call result for health monitoring.
+ * Call this after any runLLM / validateTradeSetup invocation.
+ */
+export function recordZAiCall(success: boolean, responseLength: number = 0): void {
+  healthStats.totalCalls++;
+  if (success && responseLength > 0) {
+    healthStats.successfulCalls++;
+    healthStats.responseLengths.push(responseLength);
+  } else {
+    healthStats.failedCalls++;
+  }
+}
+
+/**
+ * Record a trade validation result for bias tracking.
+ */
+export function recordValidationResult(verdict: 'APPROVE' | 'REJECT' | 'UNAVAILABLE'): void {
+  if (verdict === 'APPROVE') healthStats.approvals++;
+  else if (verdict === 'REJECT') healthStats.rejections++;
+  else healthStats.unavailable++;
+}
+
+/**
+ * Get current health stats with alerting thresholds.
+ * Alerts trigger when:
+ *   - >10% calls fail in current scan cycle
+ *   - Approve rate >95% (rubber-stamping bias)
+ *   - Reject rate >80% (over-conservative bias)
+ */
+export function getZAiHealthStats(): ZAiHealthStats {
+  const total = healthStats.totalCalls;
+  const failureRate = total > 0 ? healthStats.failedCalls / total : 0;
+  const validationTotal = healthStats.approvals + healthStats.rejections + healthStats.unavailable;
+  const approvalRate = validationTotal > 0 ? healthStats.approvals / validationTotal : 0;
+  const rejectionRate = validationTotal > 0 ? healthStats.rejections / validationTotal : 0;
+  const avgLen = healthStats.responseLengths.length > 0
+    ? healthStats.responseLengths.reduce((s, l) => s + l, 0) / healthStats.responseLengths.length
+    : 0;
+
+  const alerts: string[] = [];
+
+  // Alert: High failure rate
+  if (total >= 3 && failureRate > 0.10) {
+    alerts.push(`⚠️ Z.AI failure rate ${(failureRate * 100).toFixed(0)}% (${healthStats.failedCalls}/${total} calls failed)`);
+  }
+
+  // Alert: Rubber-stamping bias (approve >95%)
+  if (validationTotal >= 5 && approvalRate > 0.95) {
+    alerts.push(`⚠️ Z.AI approval bias: ${(approvalRate * 100).toFixed(0)}% approved (${healthStats.approvals}/${validationTotal}) — possible rubber-stamping`);
+  }
+
+  // Alert: Over-conservative bias (reject >80%)
+  if (validationTotal >= 5 && rejectionRate > 0.80) {
+    alerts.push(`⚠️ Z.AI rejection bias: ${(rejectionRate * 100).toFixed(0)}% rejected (${healthStats.rejections}/${validationTotal}) — may be blocking valid trades`);
+  }
+
+  // Alert: Complete unavailability
+  if (total >= 3 && healthStats.unavailable === validationTotal && validationTotal > 0) {
+    alerts.push(`🚨 Z.AI completely unavailable for all ${validationTotal} validation calls`);
+  }
+
+  return {
+    totalCalls: total,
+    successfulCalls: healthStats.successfulCalls,
+    failedCalls: healthStats.failedCalls,
+    failureRate,
+    approvals: healthStats.approvals,
+    rejections: healthStats.rejections,
+    unavailable: healthStats.unavailable,
+    approvalRate,
+    rejectionRate,
+    avgResponseLength: avgLen,
+    lastResetAt: healthStats.lastResetAt,
+    alerts,
+  };
+}
+
+/**
+ * Reset health stats (call at start of each scan cycle).
+ */
+export function resetZAiHealthStats(): void {
+  healthStats.totalCalls = 0;
+  healthStats.successfulCalls = 0;
+  healthStats.failedCalls = 0;
+  healthStats.approvals = 0;
+  healthStats.rejections = 0;
+  healthStats.unavailable = 0;
+  healthStats.responseLengths = [];
+  healthStats.lastResetAt = Date.now();
+}
+
+/**
+ * Format Z.AI health report for Telegram.
+ */
+export function formatZAiHealthReport(stats: ZAiHealthStats): string {
+  const lines = [
+    `🤖 <b>Z.AI Health Report</b>`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `Calls: ${stats.totalCalls} (✅ ${stats.successfulCalls} | ❌ ${stats.failedCalls})`,
+    `Failure rate: ${(stats.failureRate * 100).toFixed(1)}%`,
+    `Validations: ✅ ${stats.approvals} approved | ❌ ${stats.rejections} rejected | ⏭️ ${stats.unavailable} unavailable`,
+    `Approval rate: ${(stats.approvalRate * 100).toFixed(0)}% | Rejection rate: ${(stats.rejectionRate * 100).toFixed(0)}%`,
+    `Avg response: ${stats.avgResponseLength.toFixed(0)} chars`,
+  ];
+
+  if (stats.alerts.length > 0) {
+    lines.push(``, `<b>Alerts:</b>`);
+    for (const alert of stats.alerts) {
+      lines.push(`  ${alert}`);
+    }
+  }
+
+  return lines.join('\n');
+}

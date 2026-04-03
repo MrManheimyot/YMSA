@@ -399,3 +399,282 @@ export async function loadKillSwitchState(db: D1Database | undefined): Promise<T
     return { level: 'NONE', action: 'Normal operations (DB unavailable)', threshold: 0 };
   }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// P3: DYNAMIC ENGINE BUDGETS — Performance-based rebalancing
+// ═══════════════════════════════════════════════════════════════
+
+const MIN_ENGINE_BUDGET = 0.05;   // Floor: 5% per engine
+const MAX_ENGINE_BUDGET = 0.40;   // Ceiling: 40% per engine
+
+export interface EngineBudgetRebalance {
+  engineId: string;
+  oldBudget: number;
+  newBudget: number;
+  winRate: number;
+  profitFactor: number;
+  reason: string;
+}
+
+/**
+ * Rebalance ENGINE_BUDGETS based on rolling 30-day performance.
+ * Called monthly or weekly. Modifies the in-memory ENGINE_BUDGETS.
+ * Returns a report of changes for Telegram notification.
+ */
+export async function rebalanceEngineBudgets(
+  db: D1Database | undefined,
+): Promise<EngineBudgetRebalance[]> {
+  if (!db) return [];
+
+  const changes: EngineBudgetRebalance[] = [];
+  const engineIds = Object.keys(ENGINE_BUDGETS);
+
+  // Fetch 30-day performance + closed trades per engine
+  const perfMap: Record<string, { winRate: number; profitFactor: number; trades: number; pnl: number }> = {};
+
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  for (const engineId of engineIds) {
+    try {
+      const trades = await db.prepare(
+        `SELECT * FROM trades WHERE engine_id = ? AND status = 'CLOSED' AND closed_at >= ?`
+      ).bind(engineId, thirtyDaysAgo).all();
+
+      const tradeRows = (trades.results || []) as unknown as Array<{ pnl: number | null; pnl_pct: number | null }>;
+      const total = tradeRows.length;
+      const wins = tradeRows.filter(t => (t.pnl || 0) > 0);
+      const losses = tradeRows.filter(t => (t.pnl || 0) < 0);
+      const grossWin = wins.reduce((s, t) => s + (t.pnl || 0), 0);
+      const grossLoss = Math.abs(losses.reduce((s, t) => s + (t.pnl || 0), 0));
+
+      perfMap[engineId] = {
+        winRate: total > 0 ? wins.length / total : 0.5,
+        profitFactor: grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 2.0 : 1.0,
+        trades: total,
+        pnl: tradeRows.reduce((s, t) => s + (t.pnl || 0), 0),
+      };
+    } catch {
+      perfMap[engineId] = { winRate: 0.5, profitFactor: 1.0, trades: 0, pnl: 0 };
+    }
+  }
+
+  // Compute composite score for each engine
+  const scores: Record<string, number> = {};
+  for (const engineId of engineIds) {
+    const perf = perfMap[engineId];
+    // Score = (winRate * 40) + (profitFactor * 30) + (min(trades, 20) / 20 * 30)
+    // Range: 0-100, higher = better performance
+    const wrScore = perf.winRate * 40;
+    const pfScore = Math.min(perf.profitFactor, 3) / 3 * 30;
+    const activityScore = Math.min(perf.trades, 20) / 20 * 30;
+    scores[engineId] = wrScore + pfScore + activityScore;
+  }
+
+  // Normalize scores to budget proportions
+  const totalScore = Object.values(scores).reduce((s, v) => s + v, 0);
+  if (totalScore <= 0) return []; // No data — keep current budgets
+
+  const rawBudgets: Record<string, number> = {};
+  for (const engineId of engineIds) {
+    rawBudgets[engineId] = scores[engineId] / totalScore;
+  }
+
+  // Apply floor and ceiling, then renormalize
+  let totalBudget = 0;
+  const clampedBudgets: Record<string, number> = {};
+  for (const engineId of engineIds) {
+    clampedBudgets[engineId] = Math.max(MIN_ENGINE_BUDGET, Math.min(MAX_ENGINE_BUDGET, rawBudgets[engineId]));
+    totalBudget += clampedBudgets[engineId];
+  }
+
+  // Renormalize to sum to 1.0
+  for (const engineId of engineIds) {
+    const oldBudget = ENGINE_BUDGETS[engineId];
+    const newBudget = clampedBudgets[engineId] / totalBudget;
+
+    // Only report meaningful changes (>1% shift)
+    if (Math.abs(newBudget - oldBudget) > 0.01) {
+      const perf = perfMap[engineId];
+      changes.push({
+        engineId,
+        oldBudget,
+        newBudget,
+        winRate: perf.winRate,
+        profitFactor: perf.profitFactor,
+        reason: perf.trades < 5
+          ? 'Low activity — using default score'
+          : `WR ${(perf.winRate * 100).toFixed(0)}%, PF ${perf.profitFactor.toFixed(2)}, ${perf.trades} trades`,
+      });
+    }
+
+    ENGINE_BUDGETS[engineId] = newBudget;
+  }
+
+  return changes;
+}
+
+/**
+ * Format dynamic budget rebalance report for Telegram
+ */
+// ═══════════════════════════════════════════════════════════════
+// P5: ENGINE PROBATION SYSTEM — Auto-penalize underperformers
+// ═══════════════════════════════════════════════════════════════
+
+export interface EngineProbation {
+  engineId: string;
+  onProbation: boolean;
+  reason: string;
+  originalBudget: number;
+  probationBudget: number;
+  closedTrades: number;
+  wins: number;
+  consecutiveWins: number;
+}
+
+// In-memory probation state (persists within Worker lifetime, reset by rebalance)
+const probationState: Record<string, { onProbation: boolean; originalBudget: number; consecutiveWins: number }> = {};
+
+/**
+ * Evaluate engine probation status.
+ * Trigger: 0 wins with ≥5 closed trades → probation (budget → 5%, threshold +10)
+ * Recovery: 5 consecutive wins → restore budget
+ */
+export async function evaluateEngineProbation(
+  db: D1Database | undefined,
+): Promise<EngineProbation[]> {
+  if (!db) return [];
+
+  const results: EngineProbation[] = [];
+  const engineIds = Object.keys(ENGINE_BUDGETS);
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+
+  for (const engineId of engineIds) {
+    try {
+      const trades = await db.prepare(
+        `SELECT pnl FROM trades WHERE engine_id = ? AND status = 'CLOSED' AND closed_at >= ? ORDER BY closed_at ASC`
+      ).bind(engineId, thirtyDaysAgo).all();
+
+      const tradeRows = (trades.results || []) as unknown as Array<{ pnl: number | null }>;
+      const total = tradeRows.length;
+      const wins = tradeRows.filter(t => (t.pnl || 0) > 0).length;
+
+      // Initialize probation state if needed
+      if (!probationState[engineId]) {
+        probationState[engineId] = {
+          onProbation: false,
+          originalBudget: ENGINE_BUDGETS[engineId],
+          consecutiveWins: 0,
+        };
+      }
+
+      const state = probationState[engineId];
+
+      // Count consecutive wins from most recent trades
+      let consWins = 0;
+      for (let j = tradeRows.length - 1; j >= 0; j--) {
+        if ((tradeRows[j].pnl || 0) > 0) consWins++;
+        else break;
+      }
+      state.consecutiveWins = consWins;
+
+      // Check probation trigger: 0 wins with ≥5 trades
+      if (!state.onProbation && total >= 5 && wins === 0) {
+        state.onProbation = true;
+        state.originalBudget = ENGINE_BUDGETS[engineId];
+        ENGINE_BUDGETS[engineId] = MIN_ENGINE_BUDGET; // 5%
+        results.push({
+          engineId,
+          onProbation: true,
+          reason: `0 wins in ${total} trades — budget reduced to 5%`,
+          originalBudget: state.originalBudget,
+          probationBudget: MIN_ENGINE_BUDGET,
+          closedTrades: total,
+          wins,
+          consecutiveWins: consWins,
+        });
+      }
+      // Check recovery: 5 consecutive wins → restore
+      else if (state.onProbation && consWins >= 5) {
+        ENGINE_BUDGETS[engineId] = state.originalBudget;
+        state.onProbation = false;
+        results.push({
+          engineId,
+          onProbation: false,
+          reason: `5 consecutive wins — budget restored to ${(state.originalBudget * 100).toFixed(0)}%`,
+          originalBudget: state.originalBudget,
+          probationBudget: ENGINE_BUDGETS[engineId],
+          closedTrades: total,
+          wins,
+          consecutiveWins: consWins,
+        });
+      }
+      // Existing probation — also check if general performance improved (>40% WR with ≥10 trades)
+      else if (state.onProbation && total >= 10 && wins / total > 0.4) {
+        ENGINE_BUDGETS[engineId] = state.originalBudget;
+        state.onProbation = false;
+        results.push({
+          engineId,
+          onProbation: false,
+          reason: `WR improved to ${((wins / total) * 100).toFixed(0)}% — budget restored`,
+          originalBudget: state.originalBudget,
+          probationBudget: ENGINE_BUDGETS[engineId],
+          closedTrades: total,
+          wins,
+          consecutiveWins: consWins,
+        });
+      }
+    } catch (err) {
+      console.error(`[P5] Probation check failed for ${engineId}:`, err);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Format probation report for Telegram
+ */
+export function formatProbationReport(probations: EngineProbation[]): string {
+  if (probations.length === 0) return '';
+
+  const lines = [`🚦 <b>Engine Probation Update</b>`, `━━━━━━━━━━━━━━━━━━━━━━`];
+  for (const p of probations) {
+    const icon = p.onProbation ? '🔴' : '🟢';
+    lines.push(`${icon} <b>${p.engineId}</b>: ${p.reason}`);
+    lines.push(`   Trades: ${p.closedTrades} | Wins: ${p.wins} | Consec: ${p.consecutiveWins}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * Check if an engine is currently on probation.
+ */
+export function isOnProbation(engineId: string): boolean {
+  return probationState[engineId]?.onProbation || false;
+}
+
+export function formatBudgetRebalance(changes: EngineBudgetRebalance[]): string {
+  if (changes.length === 0) {
+    return `⚖️ <b>Engine Budget Re-check</b>\nNo significant changes — budgets stable.`;
+  }
+
+  const lines = [
+    `⚖️ <b>Engine Budget Rebalance</b>`,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+  ];
+
+  for (const c of changes) {
+    const arrow = c.newBudget > c.oldBudget ? '📈' : '📉';
+    lines.push(
+      `${arrow} <b>${c.engineId}</b>: ${(c.oldBudget * 100).toFixed(0)}% → ${(c.newBudget * 100).toFixed(0)}%`,
+      `   ${c.reason}`,
+    );
+  }
+
+  lines.push(``, `Current budgets:`);
+  for (const [id, budget] of Object.entries(ENGINE_BUDGETS)) {
+    lines.push(`  ${id}: ${(budget * 100).toFixed(0)}%`);
+  }
+
+  return lines.join('\n');
+}
