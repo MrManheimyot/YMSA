@@ -5,7 +5,7 @@
 import type { Env } from '../types';
 import { calculatePositionSize, calculateATRStop } from '../analysis/position-sizer';
 import { submitBracketOrder, getAccount } from '../api/alpaca';
-import { insertTrade, upsertPosition, insertSignal, closeTrade, generateId } from '../db/queries';
+import { insertTrade, upsertPosition, insertSignal, closeTrade, generateId, getOpenTrades, getRecentTrades } from '../db/queries';
 import type { TradeRecord } from '../db/queries';
 import { reviewTrade, isZAiAvailable } from '../ai/z-engine';
 
@@ -112,6 +112,32 @@ export async function executeSignal(
     return { success: false, skipped: `Strength ${strength} < min ${limits.minStrength}` };
   }
 
+  // ── Position & Daily Trade Limits ──
+  if (env.DB) {
+    try {
+      const openTrades = await getOpenTrades(env.DB);
+      if (openTrades.length >= limits.maxOpenPositions) {
+        return { success: false, skipped: `Open positions ${openTrades.length} >= max ${limits.maxOpenPositions}` };
+      }
+
+      // Block contradictory position (same symbol, opposite direction)
+      const hasOpposite = openTrades.some(t => t.symbol === symbol && t.side !== direction);
+      if (hasOpposite) {
+        return { success: false, skipped: `Contradictory position: ${symbol} already has opposite-direction trade open` };
+      }
+
+      const todayStart = new Date();
+      todayStart.setUTCHours(0, 0, 0, 0);
+      const recentTrades = await getRecentTrades(env.DB, 100);
+      const todayTradeCount = recentTrades.filter(t => t.opened_at >= todayStart.getTime()).length;
+      if (todayTradeCount >= limits.maxDailyTrades) {
+        return { success: false, skipped: `Daily trades ${todayTradeCount} >= max ${limits.maxDailyTrades}` };
+      }
+    } catch (e) {
+      console.error(`[Exec] Position limit check failed: ${e}`);
+    }
+  }
+
   // Get account equity
   const account = await getAccount(env);
   if (!account) {
@@ -123,12 +149,24 @@ export async function executeSignal(
   }
 
   // ── Position Sizing ──
+  // Use actual win rate from recent trades if enough data, else conservative default
+  let winRate = 0.55;
+  if (env.DB) {
+    try {
+      const recent = await getRecentTrades(env.DB, 50);
+      const closed = recent.filter(t => t.status === 'CLOSED' && t.pnl !== null);
+      if (closed.length >= 10) {
+        const wins = closed.filter(t => (t.pnl ?? 0) > 0).length;
+        winRate = Math.max(0.30, Math.min(0.80, wins / closed.length));
+      }
+    } catch (_) { /* keep default */ }
+  }
   const stopCalc = calculateATRStop(entryPrice, atr, 2.0, direction === 'BUY' ? 'LONG' : 'SHORT');
   const size = calculatePositionSize({
     equity,
     entryPrice,
     atr,
-    winRate: 0.55,      // default conservative estimate
+    winRate,
     avgWinPct: 3.0,
     avgLossPct: 2.0,
     riskPerTrade: 0.02,

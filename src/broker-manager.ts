@@ -379,8 +379,8 @@ export async function pushEventDriven(
     direction,
     confidence,
     entry: quote?.price,
-    stopLoss: quote ? (direction === 'BUY' ? quote.price - atr * 2.5 : quote.price + atr * 2.5) : undefined,
-    tp1: quote ? (direction === 'BUY' ? quote.price + atr * 2 : quote.price - atr * 2) : undefined,
+    stopLoss: quote ? (direction === 'BUY' ? quote.price - atr * 2 : quote.price + atr * 2) : undefined,
+    tp1: quote ? (direction === 'BUY' ? quote.price + atr * 4.5 : quote.price - atr * 4.5) : undefined,
     reason,
     signals,
   }, db || null);
@@ -408,8 +408,8 @@ export async function pushOptions(
     confidence,
     entry: quote.price,
     stopLoss: direction === 'BUY' ? quote.price - atr * 1.5 : quote.price + atr * 1.5,
-    tp1: direction === 'BUY' ? quote.price + atr * 2 : quote.price - atr * 2,
-    tp2: direction === 'BUY' ? quote.price + atr * 4 : quote.price - atr * 4,
+    tp1: direction === 'BUY' ? quote.price + atr * 3.5 : quote.price - atr * 3.5,
+    tp2: direction === 'BUY' ? quote.price + atr * 5 : quote.price - atr * 5,
     reason: `${signalType}: ${symbol} showing options-grade setup with ${confidence}% confidence.`,
     signals: [
       `Signal: ${signalType}`,

@@ -63,9 +63,16 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
     // Skip alerts without entry price
     if (!alert.entry_price || alert.entry_price <= 0) continue;
 
+    // Only simulate alerts that passed the Telegram confidence gate (≥85)
+    if (alert.confidence < 85) continue;
+
     // Skip if we already have an OPEN trade for this symbol+side
     const posKey = `${alert.symbol}:${alert.action}`;
     if (openPositions.has(posKey)) continue;
+
+    // Block contradictory positions — no BUY+SELL on same symbol simultaneously
+    const oppositeKey = `${alert.symbol}:${alert.action === 'BUY' ? 'SELL' : 'BUY'}`;
+    if (openPositions.has(oppositeKey)) continue;
 
     const tradeId = generateId(SIM_PREFIX);
     const qty = calculateSimQty(alert);
