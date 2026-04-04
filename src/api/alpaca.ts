@@ -3,6 +3,9 @@
 // Supports: orders, positions, account, bracket orders, bars
 
 import type { Env } from '../types';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Alpaca');
 
 // ─── Constants ───────────────────────────────────────────────
 
@@ -115,9 +118,9 @@ async function alpacaDataFetch(
 export async function getAccount(env: Env): Promise<AlpacaAccount | null> {
   try {
     const res = await alpacaFetch('/account', env);
-    if (!res.ok) { console.error(`[Alpaca] Account error: ${res.status}`); return null; }
+    if (!res.ok) { logger.error(`Account error: ${res.status}`); return null; }
     return await res.json() as AlpacaAccount;
-  } catch (err) { console.error('[Alpaca] Account error:', err); return null; }
+  } catch (err) { logger.error('Account error', err); return null; }
 }
 
 // ─── Positions ───────────────────────────────────────────────
@@ -174,11 +177,11 @@ export async function submitOrder(params: OrderParams, env: Env): Promise<Alpaca
 
     if (!res.ok) {
       const errText = await res.text();
-      console.error(`[Alpaca] Order error ${res.status}: ${errText}`);
+      logger.error(`Order error ${res.status}: ${errText}`);
       return null;
     }
     return await res.json() as AlpacaOrder;
-  } catch (err) { console.error('[Alpaca] Order error:', err); return null; }
+  } catch (err) { logger.error('Order error', err); return null; }
 }
 
 export async function submitBracketOrder(params: BracketOrderParams, env: Env): Promise<AlpacaOrder | null> {
@@ -205,11 +208,11 @@ export async function submitBracketOrder(params: BracketOrderParams, env: Env): 
 
     if (!res.ok) {
       const errText = await res.text();
-      console.error(`[Alpaca] Bracket order error ${res.status}: ${errText}`);
+      logger.error(`Bracket order error ${res.status}: ${errText}`);
       return null;
     }
     return await res.json() as AlpacaOrder;
-  } catch (err) { console.error('[Alpaca] Bracket order error:', err); return null; }
+  } catch (err) { logger.error('Bracket order error', err); return null; }
 }
 
 export async function cancelOrder(orderId: string, env: Env): Promise<boolean> {
@@ -232,6 +235,106 @@ export async function getOrders(status: string, env: Env): Promise<AlpacaOrder[]
     if (!res.ok) return [];
     return await res.json() as AlpacaOrder[];
   } catch { return []; }
+}
+
+export async function getOrder(orderId: string, env: Env): Promise<AlpacaOrder | null> {
+  try {
+    const res = await alpacaFetch(`/orders/${encodeURIComponent(orderId)}`, env);
+    if (!res.ok) return null;
+    return await res.json() as AlpacaOrder;
+  } catch { return null; }
+}
+
+export async function modifyOrder(
+  orderId: string,
+  params: { qty?: number; limit_price?: number; stop_price?: number; trail?: number; time_in_force?: string },
+  env: Env,
+): Promise<AlpacaOrder | null> {
+  try {
+    const body: Record<string, string> = {};
+    if (params.qty !== undefined) body.qty = params.qty.toString();
+    if (params.limit_price !== undefined) body.limit_price = params.limit_price.toString();
+    if (params.stop_price !== undefined) body.stop_price = params.stop_price.toString();
+    if (params.trail !== undefined) body.trail = params.trail.toString();
+    if (params.time_in_force) body.time_in_force = params.time_in_force;
+
+    const res = await alpacaFetch(`/orders/${encodeURIComponent(orderId)}`, env, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      logger.error(`Modify order error ${res.status}: ${errText}`);
+      return null;
+    }
+    return await res.json() as AlpacaOrder;
+  } catch (err) { logger.error('Modify order error', err); return null; }
+}
+
+// ─── Market Data ─────────────────────────────────────────────
+
+/**
+ * GAP-007: Submit a native Alpaca trailing stop order.
+ * Alpaca manages the trail server-side — zero latency, no missed ticks.
+ * Use for live trading; use internal trailing.ts for simulated/paper.
+ */
+export async function submitTrailingStopOrder(
+  params: {
+    symbol: string;
+    qty: number;
+    side: 'buy' | 'sell';
+    trailPercent: number;     // e.g. 2.0 for 2% trail
+    takeProfitPrice?: number; // optional take-profit limit
+    timeInForce?: 'day' | 'gtc';
+  },
+  env: Env,
+): Promise<AlpacaOrder | null> {
+  // If take-profit is specified, submit an OTO (one-triggers-other) pair:
+  // 1. Main trailing stop order 2. Take-profit limit order
+  // Otherwise submit a simple trailing_stop order.
+  if (params.takeProfitPrice) {
+    // Submit as two separate orders: trailing stop + limit (GTC)
+    const trailOrder = await submitOrder({
+      symbol: params.symbol,
+      qty: params.qty,
+      side: params.side,
+      type: 'trailing_stop',
+      time_in_force: params.timeInForce || 'gtc',
+      trail_percent: params.trailPercent,
+    }, env);
+    return trailOrder;
+  }
+
+  return submitOrder({
+    symbol: params.symbol,
+    qty: params.qty,
+    side: params.side,
+    type: 'trailing_stop',
+    time_in_force: params.timeInForce || 'gtc',
+    trail_percent: params.trailPercent,
+  }, env);
+}
+
+/**
+ * GAP-007: Replace an existing bracket stop-loss with a native trailing stop.
+ * Cancels the existing SL order and submits a trailing_stop in its place.
+ */
+export async function replaceWithTrailingStop(
+  existingOrderId: string,
+  params: { symbol: string; qty: number; side: 'buy' | 'sell'; trailPercent: number },
+  env: Env,
+): Promise<AlpacaOrder | null> {
+  const cancelled = await cancelOrder(existingOrderId, env);
+  if (!cancelled) {
+    logger.error(`Failed to cancel order ${existingOrderId} for trailing stop replacement`);
+    return null;
+  }
+  return submitTrailingStopOrder({
+    symbol: params.symbol,
+    qty: params.qty,
+    side: params.side,
+    trailPercent: params.trailPercent,
+  }, env);
 }
 
 // ─── Market Data ─────────────────────────────────────────────

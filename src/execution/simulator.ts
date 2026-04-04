@@ -12,13 +12,22 @@ import {
   getRecentTrades,
   getRecentDailyPnl,
   insertTrade,
+  type TradeRecord,
   closeTrade,
   cancelTrade,
   upsertDailyPnl,
   generateId,
   updateTelegramAlertOutcome,
+  updateTrailingState,
+  updateTradeQty,
   type TelegramAlertRecord,
 } from '../db/queries';
+import {
+  createTrailingState,
+  updateTrailingStop,
+  deserializeTrailingState,
+  serializeTrailingState,
+} from './trailing';
 
 // ─── Constants ───────────────────────────────────────────────
 
@@ -89,6 +98,7 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
       status: 'OPEN',
       opened_at: alert.sent_at,
       broker_order_id: alert.id, // links back to the telegram_alert
+      trailing_state: null,
     });
 
     openPositions.add(posKey); // prevent further dupes in this batch
@@ -126,7 +136,8 @@ function calculateSimQty(alert: TelegramAlertRecord): number {
 
 /**
  * Check all open simulated trades against current market prices.
- * Close trades that hit SL or TP. Returns count of resolved trades.
+ * Uses trailing stop system: INITIAL → BREAKEVEN → TRAILING phases.
+ * Handles partial take-profit scaling and SL ratcheting.
  */
 export async function resolveSimulatedTrades(env: Env): Promise<number> {
   if (!env.DB) return 0;
@@ -147,36 +158,76 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
 
     const isBuy = trade.side === 'BUY';
     const entry = trade.entry_price;
-    const sl = trade.stop_loss;
-    const tp = trade.take_profit;
 
-    // Check stop loss
-    if (sl && sl > 0 && ((isBuy && currentPrice <= sl) || (!isBuy && currentPrice >= sl))) {
-      const exitPrice = sl; // assume filled at SL
+    // Initialize or restore trailing state
+    let trailState = deserializeTrailingState(trade.trailing_state);
+    if (!trailState && trade.stop_loss > 0) {
+      const atrEstimate = Math.abs(entry - trade.stop_loss) / 2.0; // reverse-engineer ATR from SL
+      trailState = createTrailingState(entry, trade.stop_loss, atrEstimate, trade.side);
+    }
+
+    // If no trailing state possible (no stop loss), fall back to legacy logic
+    if (!trailState) {
+      resolved += await resolveLegacy(env, trade, currentPrice);
+      continue;
+    }
+
+    // Run trailing stop update
+    const result = updateTrailingStop(trailState, currentPrice);
+
+    // Handle partial take-profit
+    if (result.partialTp && trade.qty > 1) {
+      const sellQty = Math.max(1, Math.floor(trade.qty * result.partialTp.fraction));
+      const remainQty = trade.qty - sellQty;
+
+      if (remainQty > 0) {
+        // Partially close: record P&L on the sold portion
+        const partialPnl = isBuy
+          ? (currentPrice - entry) * sellQty
+          : (entry - currentPrice) * sellQty;
+        const partialPnlPct = entry > 0 ? ((currentPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
+
+        console.log(`[Simulator] Partial TP P&L%: ${partialPnlPct.toFixed(2)}%`);
+
+        // Update qty in the trade
+        await updateTradeQty(env.DB, trade.id, remainQty);
+        trade.qty = remainQty;
+
+        // Mark this partial TP level as triggered
+        trailState.partialTpTriggered = [
+          ...trailState.partialTpTriggered,
+          result.partialTp.levelIndex,
+        ];
+
+        console.log(
+          `[Simulator] Partial TP on ${trade.symbol}: sold ${sellQty} shares ` +
+          `at $${currentPrice.toFixed(2)} (P&L: $${partialPnl.toFixed(2)}), ${remainQty} remaining`
+        );
+      }
+    }
+
+    // Handle full close (trailing/breakeven/initial stop hit)
+    if (result.shouldClose) {
+      const exitPrice = trade.stop_loss > 0 ? result.newStopLoss : currentPrice;
       const pnl = isBuy ? (exitPrice - entry) * trade.qty : (entry - exitPrice) * trade.qty;
       const pnlPct = entry > 0 ? ((exitPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
       await closeTrade(env.DB, trade.id, exitPrice, pnl, pnlPct);
-      // Sync telegram_alert outcome
       if (trade.broker_order_id?.startsWith('tga_')) {
-        await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, 'LOSS', exitPrice, pnl, pnlPct, `Hit stop loss at $${exitPrice.toFixed(2)}`);
+        const outcome = pnl >= 0 ? 'WIN' : 'LOSS';
+        await updateTelegramAlertOutcome(
+          env.DB!, trade.broker_order_id, outcome as 'WIN' | 'LOSS',
+          exitPrice, pnl, pnlPct, result.closeReason ?? 'Stop hit'
+        );
       }
       resolved++;
       continue;
     }
 
-    // Check take profit
-    if (tp && tp > 0 && ((isBuy && currentPrice >= tp) || (!isBuy && currentPrice <= tp))) {
-      const exitPrice = tp; // assume filled at TP
-      const pnl = isBuy ? (exitPrice - entry) * trade.qty : (entry - exitPrice) * trade.qty;
-      const pnlPct = entry > 0 ? ((exitPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
-      await closeTrade(env.DB, trade.id, exitPrice, pnl, pnlPct);
-      // Sync telegram_alert outcome
-      if (trade.broker_order_id?.startsWith('tga_')) {
-        await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, 'WIN', exitPrice, pnl, pnlPct, `Hit take profit at $${exitPrice.toFixed(2)}`);
-      }
-      resolved++;
-      continue;
-    }
+    // Update trailing state and SL in DB
+    trailState.currentStopLoss = result.newStopLoss;
+    trailState.highWaterMark = result.highWaterMark;
+    trailState.phase = result.phase;
+    await updateTrailingState(env.DB, trade.id, result.newStopLoss, serializeTrailingState(trailState));
 
     // Auto-close after 7 days at market price (avoid stale trades)
     const ageMs = Date.now() - trade.opened_at;
@@ -184,10 +235,12 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
       const pnl = isBuy ? (currentPrice - entry) * trade.qty : (entry - currentPrice) * trade.qty;
       const pnlPct = entry > 0 ? ((currentPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
       await closeTrade(env.DB, trade.id, currentPrice, pnl, pnlPct);
-      // Sync telegram_alert outcome
       const outcome = pnl >= 0 ? 'WIN' : 'LOSS';
       if (trade.broker_order_id?.startsWith('tga_')) {
-        await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, outcome as 'WIN' | 'LOSS', currentPrice, pnl, pnlPct, `Auto-closed after 7d at $${currentPrice.toFixed(2)}`);
+        await updateTelegramAlertOutcome(
+          env.DB!, trade.broker_order_id, outcome as 'WIN' | 'LOSS',
+          currentPrice, pnl, pnlPct, `Auto-closed after 7d at $${currentPrice.toFixed(2)}`
+        );
       }
       resolved++;
     }
@@ -197,6 +250,48 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
     console.log(`[Simulator] Resolved ${resolved} simulated trades`);
   }
   return resolved;
+}
+
+/** Legacy resolution for trades without trailing state (no stop loss set). */
+async function resolveLegacy(env: Env, trade: TradeRecord, currentPrice: number): Promise<number> {
+  const isBuy = trade.side === 'BUY';
+  const entry = trade.entry_price;
+  const sl = trade.stop_loss;
+  const tp = trade.take_profit;
+
+  if (sl && sl > 0 && ((isBuy && currentPrice <= sl) || (!isBuy && currentPrice >= sl))) {
+    const pnl = isBuy ? (sl - entry) * trade.qty : (entry - sl) * trade.qty;
+    const pnlPct = entry > 0 ? ((sl - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
+    await closeTrade(env.DB, trade.id, sl, pnl, pnlPct);
+    if (trade.broker_order_id?.startsWith('tga_')) {
+      await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, 'LOSS', sl, pnl, pnlPct, `Hit stop loss at $${sl.toFixed(2)}`);
+    }
+    return 1;
+  }
+
+  if (tp && tp > 0 && ((isBuy && currentPrice >= tp) || (!isBuy && currentPrice <= tp))) {
+    const pnl = isBuy ? (tp - entry) * trade.qty : (entry - tp) * trade.qty;
+    const pnlPct = entry > 0 ? ((tp - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
+    await closeTrade(env.DB, trade.id, tp, pnl, pnlPct);
+    if (trade.broker_order_id?.startsWith('tga_')) {
+      await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, 'WIN', tp, pnl, pnlPct, `Hit take profit at $${tp.toFixed(2)}`);
+    }
+    return 1;
+  }
+
+  const ageMs = Date.now() - trade.opened_at;
+  if (ageMs > 7 * 24 * 60 * 60 * 1000) {
+    const pnl = isBuy ? (currentPrice - entry) * trade.qty : (entry - currentPrice) * trade.qty;
+    const pnlPct = entry > 0 ? ((currentPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
+    await closeTrade(env.DB, trade.id, currentPrice, pnl, pnlPct);
+    const outcome = pnl >= 0 ? 'WIN' : 'LOSS';
+    if (trade.broker_order_id?.startsWith('tga_')) {
+      await updateTelegramAlertOutcome(env.DB!, trade.broker_order_id, outcome as 'WIN' | 'LOSS', currentPrice, pnl, pnlPct, `Auto-closed after 7d at $${currentPrice.toFixed(2)}`);
+    }
+    return 1;
+  }
+
+  return 0;
 }
 
 // ─── Backfill: Sync Closed Trade Outcomes to Telegram Alerts ─

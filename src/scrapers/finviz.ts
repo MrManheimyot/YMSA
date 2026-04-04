@@ -234,3 +234,101 @@ export function formatFinvizAlert(
   lines.push(``, `🔗 <a href="https://finviz.com/screener.ashx">Open Finviz</a>`);
   return lines.join('\n');
 }
+
+// ═══════════════════════════════════════════════════════════════
+// GAP-028: Fetch-based FinViz Screener (no Browser binding required)
+// Uses HTML fetch + regex parsing instead of Playwright
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Fetch screener results via HTTP — no BROWSER binding needed.
+ * Parses the overview table HTML with regex patterns.
+ * Note: FinViz may block automated access; this is best-effort.
+ */
+export async function fetchScreenerResults(filters: ScreenerFilter): Promise<FinvizResult[]> {
+  const url = buildScreenerUrl(filters);
+
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+
+    if (!res.ok) {
+      console.error(`[Finviz] Fetch failed: ${res.status}`);
+      return [];
+    }
+
+    const html = await res.text();
+    return parseFinvizHTML(html);
+  } catch (err) {
+    console.error('[Finviz] Fetch screener error:', err);
+    return [];
+  }
+}
+
+/**
+ * Parse FinViz overview table from HTML using regex.
+ * Extracts ticker, company, sector, price, change, volume from screener table.
+ */
+function parseFinvizHTML(html: string): FinvizResult[] {
+  const results: FinvizResult[] = [];
+
+  // Match table rows in the screener results
+  // FinViz overview table: No. | Ticker | Company | Sector | Industry | Country | Market Cap | P/E | Price | Change | Volume
+  const rowPattern = /<tr[^>]*class="screener-body-table-nw"[^>]*>([\s\S]*?)<\/tr>/gi;
+  const cellPattern = /<td[^>]*>([\s\S]*?)<\/td>/gi;
+
+  let rowMatch: RegExpExecArray | null;
+  while ((rowMatch = rowPattern.exec(html)) !== null && results.length < 50) {
+    const rowHtml = rowMatch[1];
+    const cells: string[] = [];
+    let cellMatch: RegExpExecArray | null;
+
+    const cellRe = new RegExp(cellPattern.source, cellPattern.flags);
+    while ((cellMatch = cellRe.exec(rowHtml)) !== null) {
+      // Strip HTML tags
+      const text = cellMatch[1].replace(/<[^>]+>/g, '').trim();
+      cells.push(text);
+    }
+
+    if (cells.length >= 10) {
+      const changeStr = cells[9]?.replace('%', '') || '0';
+      const volumeStr = cells[10]?.replace(/,/g, '') || '0';
+
+      results.push({
+        ticker: cells[1] || '',
+        company: cells[2] || '',
+        sector: cells[3] || '',
+        industry: cells[4] || '',
+        country: cells[5] || '',
+        marketCap: cells[6] || '',
+        pe: cells[7] || '',
+        price: parseFloat(cells[8] || '0') || 0,
+        change: parseFloat(changeStr) || 0,
+        volume: parseInt(volumeStr, 10) || 0,
+      });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Fetch-based versions of common screener presets.
+ * These work without the BROWSER binding.
+ */
+export async function fetchOversoldStocks(): Promise<FinvizResult[]> {
+  return fetchScreenerResults({ rsi: 'oversold', volume: 'over500k', marketCap: 'large' });
+}
+
+export async function fetch52WeekHighs(): Promise<FinvizResult[]> {
+  return fetchScreenerResults({ performance: 'new_high', volume: 'over500k' });
+}
+
+export async function fetchTopGainers(): Promise<FinvizResult[]> {
+  return fetchScreenerResults({ change: 'up5', volume: 'over1m' });
+}

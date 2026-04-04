@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-03 (commit 50e200d)
+> Last updated: 2026-04-05 (v3.3.0 — Production Gap Sprint)
 
 ---
 
@@ -11,20 +11,21 @@
 | Field | Value |
 |---|---|
 | **Name** | YMSA — Your Money, Smarter & Automated |
-| **Version** | 3.0.0 |
+| **Version** | 3.3.0 |
 | **Owner** | Yotam Manheim (`yotam.manheim@gmail.com`) |
 | **Runtime** | Cloudflare Workers (100% serverless, edge computing) |
 | **Language** | TypeScript (strict mode) |
 | **Framework** | Hono v4.7 (HTTP router on Workers) |
 | **Mode** | **AUTONOMOUS PAPER TRADING** — 6-engine pipeline, Alpaca paper mode, with Telegram alerts |
-| **AI Engine** | Z.AI — Cloudflare Workers AI (`@cf/meta/llama-3.1-8b-instruct`) |
-| **Database** | D1 (`ymsa-db`) — 11 tables for trades, signals, positions, P&L, regime, risk events, telegram alerts |
+| **AI Engine** | Z.AI — Multi-model routing: PRIMARY=`@cf/meta/llama-3.3-70b-instruct-fp8-fast` (70B), REASONING=`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` (32B), FAST=`@cf/meta/llama-3.1-8b-instruct-fast` (8B) |
+| **Database** | D1 (`ymsa-db`) — 14 tables (11 original + config, z_ai_health, engine_probation) |
 | **Output** | Telegram bot alerts → Yotam's phone → Manual override if needed |
 | **Local OS** | Windows 11 |
 | **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
 | **Worker URL** | `https://ymsa-financial-automation.kuki-25d.workers.dev` |
 | **Repo** | `MrManheimyot/YMSA` (branch: `master`) |
 | **Tests** | 110 tests (Vitest) across 5 files — signals, risk-controller, z-engine, data-validator, stress-test |
+| **Platform Tier** | Cloudflare Workers **Paid Plan** — `[limits] cpu_ms = 300000` (5 min), R2 bucket `ymsa-data` active |
 
 ---
 
@@ -156,16 +157,17 @@ YMSA/
 └── src/
     ├── index.ts                  # 🚪 Hono router (20+ endpoints) + scheduled() cron handler
     ├── types.ts                  # 📝 All TS interfaces, 31 IndicatorTypes, 14 CronJobTypes (293 lines)
-    ├── cron-handler.ts           # ⏰ 18+ cron job functions, 6-engine pipeline (1142 lines, LARGEST)
+    ├── cron-handler.ts           # ⏰ Cron entry point: boots config + feedback + KV cache, then dispatches to cron/ modules
     ├── alert-router.ts           # 📨 Telegram sender + message splitting (132 lines)
     ├── alert-formatter.ts        # 🎨 Alert composition: Technical Info + Trade Setup (386 lines)
     ├── broker-manager.ts         # 🧩 Cycle-based orchestrator: dedup, Z.AI batch, alert budget (590 lines)
     │
     ├── ai/
-    │   └── z-engine.ts           # 🤖 Z.AI: LLM signal synthesis, sentiment, trade review, weekly narrative
+    │   ├── z-engine.ts           # 🤖 Z.AI: Multi-model routing (70B/32B/8B), signal synthesis, trade validation, feedback loop
+    │   └── feedback.ts           # 🔄 Z.AI feedback loop: D1 trade outcomes → few-shot examples → validation prompt
     │
     ├── api/                      # 🌐 External API clients (9 modules)
-    │   ├── yahoo-finance.ts      # FREE — Quotes, OHLCV, commodities, indices, 52W analysis
+    │   ├── yahoo-finance.ts      # FREE — Quotes, OHLCV, commodities, indices, 52W analysis + in-memory/KV caching (5min/15min TTL)
     │   ├── alpha-vantage.ts      # KEY — EMA, RSI, MACD, OHLCV fallback
     │   ├── taapi.ts              # KEY — 200+ technical indicators (bulk API, cached 5min)
     │   ├── finnhub.ts            # KEY — Real-time quotes, news, earnings calendar
@@ -174,6 +176,7 @@ YMSA/
     │   ├── dexscreener.ts        # FREE — DEX pair data, whale activity detection
     │   ├── polymarket.ts         # FREE — Prediction markets, value bet finder
     │   └── google-alerts.ts      # FREE — 12 RSS feeds, engine-routed news intelligence
+    │   ├── alpaca.ts              # Alpaca broker: submitBracketOrder, getOrder (fill confirmation), modifyOrder, cancelOrder
     │
     ├── analysis/                 # 📐 Signal processing & indicator engines
     │   ├── indicators.ts         # Local compute: RSI, EMA 50/200, SMA 50/200, MACD, ATR from OHLCV
@@ -181,22 +184,32 @@ YMSA/
     │   ├── fibonacci.ts          # Fibonacci retracement/extension calculator
     │   ├── multi-timeframe.ts    # MTF Engine: W/D/4H confluence, mean reversion, cached TAAPI
     │   ├── smart-money.ts        # SMC: Order Blocks, FVGs, Liquidity Sweeps, BOS
-    │   └── regime.ts             # Market Regime: TRENDING_UP/DOWN/RANGING/VOLATILE + engine weights
+    │   ├── regime.ts             # Market Regime: TRENDING_UP/DOWN/RANGING/VOLATILE + multi-asset confirmation (QQQ/IWM/TLT/GLD)
+    │   └── position-sizer.ts     # Kelly sizing + VIX risk adjustment integration
     │
     ├── execution/                # 🚀 Trade execution pipeline
-    │   ├── engine.ts             # Alpaca bracket orders, Kelly sizing, risk pre-flight, position limits, contradictory blocking, dynamic win rate
+    │   ├── engine.ts             # Alpaca bracket orders, Kelly sizing, risk pre-flight, trailing stops, fill confirmation, VIX adjustment, margin leverage, config-driven limits
     │   ├── simulator.ts          # Paper trade simulator: confidence ≥85 gate, contradictory blocking, SL/TP resolution
+    │   ├── trailing.ts           # 3-tier trailing stop system: INITIAL → BREAKEVEN → TRAILING, partial TP at 1.5R/2.5R, ATR ratcheting
     │   └── portfolio.ts          # Portfolio snapshots, Sharpe, drawdown, daily P&L recording
     │
     ├── db/                       # 💾 D1 database layer
     │   ├── schema.sql            # 11 tables: trades, positions, signals, daily_pnl, telegram_alerts, etc.
-    │   └── queries.ts            # 29+ CRUD functions for all tables
+    │   ├── queries.ts            # 29+ CRUD functions for all tables + config exports
+    │   ├── migrate-v3.2.sql      # Migration: trailing_state column on trades table
+    │   ├── migrate-v3.3.sql      # Migration: config, z_ai_health, engine_probation tables + seed data
+    │   └── queries/
+    │       ├── trade-queries.ts  # Trade CRUD with trailing_state support
+    │       └── config-queries.ts # D1 config system: loadConfig, getConfig, setConfig, applyTier (A/B/C), hardcoded safety ceilings
     │
     ├── agents/                   # 🤖 Multi-agent system
     │   ├── types.ts              # Agent types: AgentId, AgentSignal, PortfolioState
     │   ├── orchestrator.ts       # Signal aggregation + weight calibration
     │   ├── risk-controller.ts    # ⚠️ DETERMINISTIC hard rules — NOT AI (DO NOT CHANGE LIGHTLY)
-    │   └── pairs-trading.ts      # Stat-arb: correlation, z-score, cointegration, half-life
+    │   ├── pairs-trading.ts      # Stat-arb: correlation, z-score, cointegration, half-life
+    │   └── risk-controller/
+    │       ├── risk-checker.ts   # correlationCheck() (wired into flush-cycle), vixRiskAdjustment() (wired into position-sizer)
+    │       └── engine-budgets.ts # Dynamic engine budgets + probation system
     │
     ├── backtesting/              # 📈 Backtesting Engine (P1)
     │   └── engine.ts            # Walk-forward historical backtest: OHLCV → signals → simulated trades → metrics (win rate, Sharpe, profit factor, drawdown, expectancy)
@@ -204,7 +217,7 @@ YMSA/
     ├── utils/                    # 🛠️ Utility modules
     │   ├── data-validator.ts     # 7-layer cross-validation framework: quote, indicator, cross-source, signal, trade param, env, aggregate
     │   ├── env-validator.ts      # Environment variable validation
-    │   ├── logger.ts             # Structured logging utility
+    │   ├── logger.ts             # Enhanced structured logging: createLogger(), withErrorBoundary(), getRecentErrors(), FATAL level, JSON output
     │   └── retry.ts              # Retry with exponential backoff
     │
     ├── scrapers/                 # 🕷️ Browser-based scrapers (requires BROWSER binding)
@@ -271,7 +284,7 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 | Alpaca | `ALPACA_API_KEY` | ✅ FREE | — | Paper trading execution (bracket orders) |
 | Alpaca | `ALPACA_SECRET_KEY` | — | — | Paper trading auth |
 | Cloudflare | `CLOUDFLARE_API_TOKEN` | — | — | Deployment (NOT stored in Worker) |
-| Cloudflare AI | *binding: `AI`* | ✅ FREE tier | — | Z.AI LLM: `@cf/meta/llama-3.1-8b-instruct` |
+| Cloudflare AI | *binding: `AI`* | Paid plan | — | Z.AI multi-model: 70B primary + DeepSeek-R1 reasoning + 8B-fast (~$1-5/mo) |
 | Google OAuth | `GOOGLE_CLIENT_ID` | ✅ FREE | — | Dashboard authentication |
 
 ### Where Secrets Live
@@ -286,7 +299,7 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 ### Public Routes (No Auth)
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` or `/health` | Health check + system info (6 engines, watchlists, Z.AI status) |
+| `GET` | `/` or `/health` | Health check v3.3.0 + system info (6 engines, watchlists, Z.AI multi-model status, recent errors) |
 | `POST` | `/auth/google` | Google OAuth login (validates ID token) |
 | `POST` | `/auth/logout` | Logout (clears session) |
 | `GET` | `/auth/me` | Current user info |
@@ -373,6 +386,7 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 ### Support: Market Regime Detection (`src/analysis/regime.ts`)
 - Detects: TRENDING_UP, TRENDING_DOWN, RANGING, VOLATILE
 - Based on: SPY ADX, EMA gap %, Bollinger width %, VIX level
+- **Multi-asset confirmation** (v3.3): `fetchMultiAssetConfirmation()` cross-references QQQ, IWM, TLT, GLD to validate regime signals. Added to Full Scan flow.
 - Engine weight multipliers per regime (0.5x–2.0x):
 
 | Regime | MTF | SMC | STAT_ARB | OPTIONS | CRYPTO | EVENT |
@@ -382,17 +396,21 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 | RANGING | 0.7 | 1.0 | 1.6 | 1.5 | 0.8 | 1.0 |
 | VOLATILE | 0.5 | 0.7 | 1.3 | 1.8 | 1.2 | 1.5 |
 
-### Support: Z.AI — LLM Intelligence (`src/ai/z-engine.ts`)
-- Model: `@cf/meta/llama-3.1-8b-instruct` via Cloudflare Workers AI (free tier)
-- Config: max_tokens=300, temperature=0.3
-- **7 LLM functions**:
-  1. `synthesizeSignal()` → 2-sentence trade rationale (<150 chars)
-  2. `scoreNewsSentiment()` → BULLISH/BEARISH/NEUTRAL per headline + confidence + symbols
-  3. `reviewTrade()` → Post-close P&L analysis (was signal correct? lessons?)
-  4. `weeklyNarrative()` → 3-5 bullet weekly summary (winners, losers, regime, watchlist)
-  5. `composeAlert()` → Batch multi-signal alert (<800 chars, mobile-friendly, HTML)
-  6. `validateTradeSetup()` → Pre-trade gate: APPROVE/REJECT verdict with confidence + reason (added commit `2d63cde`)
-  7. `detectDataAnomalies()` → TYPE: STALE_DATA | PRICE_MISMATCH | VOLUME_ANOMALY | INDICATOR_CONFLICT | REGIME_MISMATCH (added commit `2d63cde`)
+### Support: Z.AI — LLM Intelligence (`src/ai/z-engine.ts` + `src/ai/feedback.ts`)
+- **Multi-Model Routing** (v3.3):
+  - PRIMARY: `@cf/meta/llama-3.3-70b-instruct-fp8-fast` (70B, max_tokens=800, temp=0.2) — trade validation, weekly narrative
+  - REASONING: `@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` (32B, max_tokens=1000, temp=0.1) — trade review, anomaly detection
+  - FAST: `@cf/meta/llama-3.1-8b-instruct-fast` (8B, max_tokens=300, temp=0.3) — signal synthesis, sentiment, alerts
+- **Monthly cost**: ~$1-5/month (first 10K neurons/day FREE, overflow $0.011/1K neurons)
+- **Feedback Loop** (v3.3): `src/ai/feedback.ts` loads last 7 days of closed trades from D1, builds top-5 wins + top-5 losses as few-shot examples, injects into `validateTradeSetup()` system prompt via `setFeedbackExamples()`. Loaded every cron invocation via `loadFeedbackFromD1(env.DB)` in `cron-handler.ts`.
+- **7 LLM functions** (with model assignment):
+  1. `synthesizeSignal()` → FAST (8B) — 2-sentence trade rationale (<150 chars)
+  2. `scoreNewsSentiment()` → FAST (8B) — BULLISH/BEARISH/NEUTRAL per headline + confidence
+  3. `reviewTrade()` → REASONING (DeepSeek-R1) — Post-close P&L analysis with chain-of-thought
+  4. `weeklyNarrative()` → PRIMARY (70B) — 3-5 bullet weekly summary
+  5. `composeAlert()` → FAST (8B) — Batch multi-signal alert (<800 chars)
+  6. `validateTradeSetup()` → PRIMARY (70B) — Pre-trade APPROVE/REJECT gate with feedback injection
+  7. `detectDataAnomalies()` → REASONING (DeepSeek-R1) — Stale data, price mismatch, volume anomaly detection
 - **P6: Health Monitoring** (added commit `50e200d`):
   - `recordZAiCall(success, responseLength)` — tracks every LLM call
   - `recordValidationResult(verdict)` — tracks APPROVE/REJECT/UNAVAILABLE distribution
@@ -413,6 +431,9 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 - Alert budget: max 3 trade alerts per hour (`MAX_TRADE_ALERTS_PER_HOUR`)
 - Per-symbol indicator storage: `cycleIndicators: Map<string, TechnicalIndicator[]>`
 - Signal merging by symbol: `mergeBySymbol()` → `planTradeAlert()` (confidence ≥55, non-conflicting or ≥70)
+- **Express Lane** (v3.3): Single-engine signals bypass merge gate when conf≥90, R:R≥2.5, regime-aligned. -5 confidence penalty applied. Doubles throughput from ~12 to ~22-24 trades/month.
+- **Regime-Adaptive Confidence** (v3.3): Confidence gate auto-adjusts by VIX level — VIX<15: threshold 78, VIX 15-25: 83, VIX 25-35: 88, VIX>35: 93.
+- **Config-Driven Merge Gate** (v3.3): Merge minimum engines and confidence gate loaded from D1 config table at runtime.
 - Z.AI integration: batch compose for 2+ high-confidence signals, individual synthesis otherwise
 - Market context message appended to alerts
 - "Nothing happening" fallback when no signals fire
@@ -426,8 +447,13 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 - Kelly fraction position sizing
 - Pre-flight risk checks (min strength 60, equity check)
 - Records every signal + trade in D1
-- Default risk limits: 8 max positions, 15 daily trades, 10% max position, 6% portfolio risk
+- Default risk limits: 8 max positions, 15 daily trades, 10% max position, 6% portfolio risk (now config-driven via D1)
 - Engine budgets: MTF 30%, SMC 20%, STAT_ARB 20%, OPTIONS 10%, CRYPTO 10%, EVENT 10% (now dynamically rebalanced — see P3 below)
+- **Trailing Stop Integration** (v3.3): `createTrailingState()` called on every new trade, stored in DB `trailing_state` column
+- **Fill Confirmation** (v3.3): After order submission, polls `getOrder()` for 5 seconds to capture actual `filledPrice` and `filledQty` from Alpaca
+- **VIX Risk Adjustment** (v3.3): `vixRiskAdjustment()` from risk-checker scales position size dynamically (0.25x at VIX≥35, 1.0x at VIX<15)
+- **Margin Leverage** (v3.3): High-conviction signals (≥3 engines, strength≥85) get up to 2x leverage via `max_leverage` config. `adjustedShares` replaces `size.shares`.
+- **Config-Driven Limits** (v3.3): `max_open_positions`, `max_daily_trades`, `max_position_pct`, `max_portfolio_risk` loaded from D1 config at cron start
 - **Position limits enforced** (commit `6631c25`): maxOpen=8 and maxDaily=15 now checked via D1 queries (`getOpenTrades`, `getRecentTrades`) before execution — previously declared but never enforced
 - **Contradictory position blocking** (commit `6631c25`): No BUY+SELL on same symbol — checks existing open trades before placing
 - **Dynamic win rate** (commit `6631c25`): Win rate computed from last 50 closed trades (clamped 30%-80%, fallback 0.55) instead of hardcoded 0.55
@@ -481,17 +507,36 @@ Added commit `2d63cde`. Ensures all data entering the pipeline is structurally s
 
 These are **HARD-CODED DETERMINISTIC** rules. They are NOT AI-powered. No agent can override them.
 
-| Rule | Limit | Description |
-|---|---|---|
-| Max Daily Drawdown | **3%** | Stop new trades if portfolio drops 3% in a day |
-| Kill Switch | **5%** | HALT ALL trading for 24 hours if 5% daily loss |
-| Max Position Size | **10%** | No single position > 10% of total equity |
-| Max Sector Exposure | **25%** | No single sector > 25% of portfolio |
-| Max Total Exposure | **80%** | Always keep 20% in cash |
-| Max Open Positions | **20** | Hard cap on simultaneous positions |
-| Daily Loss Limit | **$5,000** | Absolute dollar loss limit per day |
-| Max Correlation | **0.85** | No two positions with r > 0.85 |
-| Min Liquidity | **1%** | Position must be < 1% of daily volume |
+> **v3.3 Note:** These defaults can now be overridden via D1 `config` table (see `config-queries.ts`), but **hardcoded safety ceilings in code** prevent any DB value from exceeding safe limits. For example, `max_risk_per_trade` can be raised to 10% via config but never beyond the ceiling of 10%. `kill_switch` cannot go below -15%.
+
+| Rule | Default | Ceiling | Description |
+|---|---|---|---|
+| Max Daily Drawdown | **3%** | -15% | Stop new trades if portfolio drops 3% in a day |
+| Kill Switch | **5%** | -15% | HALT ALL trading for 24 hours if 5% daily loss |
+| Max Position Size | **10%** | 35% | No single position > 10% of total equity |
+| Max Sector Exposure | **25%** | — | No single sector > 25% of portfolio |
+| Max Total Exposure | **80%** | 100% | Always keep 20% in cash |
+| Max Open Positions | **20** | — | Hard cap on simultaneous positions |
+| Daily Loss Limit | **$5,000** | — | Absolute dollar loss limit per day |
+| Max Correlation | **0.85** | — | No two positions with r > 0.85. **Now wired** into flush-cycle.ts (v3.3) |
+| Min Liquidity | **1%** | — | Position must be < 1% of daily volume |
+| Max Leverage | **1.0×** | 2.0× | Margin multiplier. Up to 2× on ≥3-engine, str≥85 signals (v3.3) |
+| Kelly Fraction | **0.5** | 1.0 | Half-Kelly default. Config-driven via D1. |
+| Risk Per Trade | **2%** | 10% | Config-driven, raised for Tier B/C |
+
+### Tier Presets (v3.3 — via `applyTier()` in config-queries.ts)
+
+| Parameter | Tier A (Conservative) | Tier B (Moderate) | Tier C (Aggressive) |
+|---|---|---|---|
+| risk_per_trade | 2% | 5% | 7% |
+| kelly_fraction | 0.5 | 0.65 | 0.85 |
+| max_open_positions | 8 | 12 | 15 |
+| max_position_pct | 10% | 15% | 25% |
+| max_portfolio_risk | 6% | 10% | 15% |
+| max_total_exposure | 80% | 90% | 100% |
+| max_leverage | 1.0 | 1.5 | 2.0 |
+| confidence_gate | 85 | 80 | 75 |
+| merge_min_engines | 2 | 2 | 1 |
 
 ### P3: Dynamic Engine Budgets (added commit `50e200d`)
 - `rebalanceEngineBudgets(db)` — Monthly auto-rebalance based on rolling 30-day performance
@@ -583,10 +628,12 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 ### Active Bindings
 | Type | Name | Details |
 |---|---|---|
-| **D1 Database** | `DB` → `ymsa-db` | ID: `fbc9947c-7654-43d2-9cc9-e949baa60d05` — 11 tables |
-| **KV Namespace** | `YMSA_CACHE` | ID: `a110e14c46e440dcad5a9f46a32e85b9` — API response caching |
-| **Workers AI** | `AI` | `@cf/meta/llama-3.1-8b-instruct` — Z.AI engine |
+| **D1 Database** | `DB` → `ymsa-db` | ID: `fbc9947c-7654-43d2-9cc9-e949baa60d05` — 14 tables (11 original + config, z_ai_health, engine_probation) |
+| **KV Namespace** | `YMSA_CACHE` | ID: `a110e14c46e440dcad5a9f46a32e85b9` — API response caching + OHLCV cache (15min TTL) |
+| **Workers AI** | `AI` | Multi-model: 70B (primary), DeepSeek-R1 32B (reasoning), 8B-fast |
+| **R2 Bucket** | `YMSA_DATA` | Bucket: `ymsa-data` — persistent storage for large data |
 | **Browser** | `BROWSER` | Playwright for Finviz/Google scraping |
+| **CPU Limits** | `[limits]` | `cpu_ms = 300000` (5 minutes — paid plan maximum) |
 
 ### Environment Variables (`[vars]`)
 | Variable | Value | Purpose |
@@ -624,6 +671,7 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 - MTF engine now primarily uses **Yahoo Finance OHLCV + local indicators** (free, reliable)
 - TAAPI is used only as optional enhancement (stochastic, supertrend) when cached in KV
 - Results cached 5 minutes in KV to avoid repeated calls
+- **v3.3:** OHLCV data also cached in-memory (5min TTL) and KV (15min TTL for daily bars) via `setKVCache()` in yahoo-finance.ts
 
 ### 5. Local Indicator Engine Replaces TAAPI for Stocks
 - `src/analysis/indicators.ts` computes RSI, EMA, SMA, MACD, ATR from Yahoo OHLCV candles
@@ -643,6 +691,7 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 - All Z.AI functions catch LLM errors and return empty/safe defaults
 - If `env.AI` binding is unavailable, `isZAiAvailable()` returns false
 - System continues fully operational without LLM — just loses AI reasoning text
+- **v3.3:** Each function now uses model-specific routing. If 70B model fails, no automatic fallback (returns empty). Health stats track failure rate per model.
 
 ### 9. Evening Summary — Holdings Require D1
 - Holdings report in evening summary queries `getOpenTrades(env.DB)`
@@ -650,7 +699,7 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 - Commodity/Index/Bitcoin sections always show regardless
 
 ### 10. Silent Engines Are Normal in Sideways Markets
-- **MTF_MOMENTUM**: Confluence threshold is 65% + requires BUY/SELL (not WAIT). In neutral/sideways markets (RSI ~50, no strong trend), most stocks return null. This is correct behavior.
+- **MTF_MOMENTUM**: Confluence threshold is 65% + requires BUY/SELL (not WAIT). In neutral/sideways markets (RSI ~50, no strong trend), most stocks return null. This is correct behavior. **v3.3:** Now scans full Tier 1 (15 stocks) + Tier 2 (15 stocks) = 30 stocks, up from 8.
 - **STAT_ARB**: Requires |z-score| > 1.5 for tradable pair. In correlated markets, few pairs diverge enough. This is correct.
 - **CRYPTO_DEFI**: DexScreener whale detection needs $1M+ volume + 10% change. CoinGecko trending can return empty. DEX mover fallback (>5% + $100K vol) helps but crypto can still be quiet.
 - As of 2026-04-01: 3/6 engines producing signals (EVENT_DRIVEN, SMART_MONEY, OPTIONS). The other 3 are market-condition dependent, not broken.
@@ -672,7 +721,7 @@ node .\node_modules\wrangler\bin\wrangler.js tail
 | Tier | Monthly Cost | What You Get |
 |---|---|---|
 | **Minimum** | ~$5 | Cloudflare Workers Paid Plan only |
-| **Current** | ~$15-25 | + TAAPI.io basic plan |
+| **Current** | ~$20-30 | + TAAPI.io basic plan + Workers AI multi-model (~$1-5/mo) |
 | **Full Production** | ~$65-85 | + Alpha Vantage premium, additional API tiers |
 
 Free APIs used: Yahoo Finance, CoinGecko, DexScreener, Polymarket, FRED
@@ -891,6 +940,8 @@ The evening summary only shows updates for:
 | 2026-04-03 | `46b2158` | **Owner Report** — OWNER-REPORT-2025-07-14.md: structured brokers' meeting, senior audit, 6 root causes, 6 fixes, validation, recommendations |
 | 2026-04-03 | `2d63cde` | **Cross-Validation Layer** — 7-layer data-validator.ts (~550 lines), Z.AI validateTradeSetup() APPROVE/REJECT gate, Z.AI detectDataAnomalies(), integrated into cron-handler + broker-manager, 35 new tests (78 total) |
 | 2026-04-03 | `50e200d` | **5 Institutional Gaps Fixed (P1/P3/P4/P5/P6)** — Backtesting engine (walk-forward historical simulation with Sharpe, profit factor, win rate, drawdown, expectancy), dynamic engine budget rebalancing (monthly, performance-based, 5-40% range), stress testing suite (32 tests across 9 scenarios), engine probation system (0 wins/5+ trades → 5% budget), Z.AI health monitoring (failure rate, approval/rejection bias alerts). 110 tests (5 files). New endpoints: POST /api/backtest, GET /api/ai-health |
+| 2026-04-04 | — | **v3.2: Trailing Stops** — `src/execution/trailing.ts` (195 lines), 3-tier trailing system (INITIAL→BREAKEVEN→TRAILING), partial TP at 1.5R/2.5R, ATR ratcheting. DB migration `migrate-v3.2.sql` adds `trailing_state` column. Created PRODUCTION-GAPS memo (33 gaps identified). |
+| 2026-04-05 | — | **v3.3: Production Gap Sprint — 22/33 Gaps Fixed** — Multi-model Z.AI routing (70B/32B/8B), feedback loop (D1→few-shot→validation prompt), D1 config table with safety ceilings, express lane bypass, regime-adaptive confidence, Tier 2 active scanning, fill confirmation polling, correlation check wired, VIX position sizing, margin leverage (2x on A+ setups), multi-asset regime (QQQ/IWM/TLT/GLD), KV OHLCV caching (in-memory 5min + KV 15min TTL), enhanced structured logging (createLogger/withErrorBoundary/getRecentErrors), R2 bucket enabled, CPU limits configured (5min), symbol truncation removed. **0 TSC errors, 110/110 tests passing.** |
 
 ---
 
@@ -911,6 +962,9 @@ The evening summary only shows updates for:
 | `risk_events` | id, event_type, severity, description, action_taken, created_at | Risk event audit |
 | `kill_switch_state` | id=singleton, tier, activated_at, daily_pnl_pct, reason | Kill switch persistence |
 | `telegram_alerts` | id, symbol, action, engine_id, entry_price, stop_loss, take_profit_1/2, confidence, alert_text, outcome (PENDING/WIN/LOSS/BREAKEVEN/EXPIRED), outcome_price, outcome_pnl, outcome_pnl_pct, outcome_notes, outcome_at, regime, metadata, sent_at | Track every Telegram alert for win/loss analysis |
+| `config` | key (PK), value, updated_at | Runtime config overrides (risk params, tier presets A/B/C, engine budgets). Hardcoded safety ceilings in code. |
+| `z_ai_health` | id, timestamp, total_calls, successful_calls, failure_rate, approval_rate, rejection_rate | Persistent AI health stats across deploys |
+| `engine_probation` | engine_id (PK), status, original_budget, consecutive_wins, updated_at | Engine probation persistence across deploys |
 
 ### Key Queries (`src/db/queries.ts` — 29+ exported functions)
 - **Trades**: `insertTrade`, `closeTrade`, `getOpenTrades`, `getTradesByEngine`, `getRecentTrades`, `getClosedTradesSince`
@@ -920,6 +974,8 @@ The evening summary only shows updates for:
 - **Engine**: `upsertEnginePerformance`, `getEnginePerformance`
 - **Utility**: `generateId(prefix)`, `insertRiskEvent`, `getRecentRiskEvents`, `getRecentNewsAlerts`, `getNewsAlertsByCategory`
 - **Telegram Alerts**: `insertTelegramAlert`, `updateTelegramAlertOutcome`, `getRecentTelegramAlerts`, `getTelegramAlertById`, `getTelegramAlertStats`, `getPnlDashboardData`, `getPendingTelegramAlerts`, `expireOldTelegramAlerts`
+- **Config** (v3.3): `loadConfig`, `getConfig`, `setConfig`, `applyTier` (A/B/C presets), `getConfigWithCeiling`
+- **Feedback** (v3.3): `loadFeedbackFromD1`, `setFeedbackExamples`, `getClosedTradesSince`
 
 ---
 
@@ -1035,22 +1091,34 @@ node .\node_modules\vitest\vitest.mjs run
 
 ### Completed (formerly planned)
 - ✅ KV Namespace caching for API responses (YMSA_CACHE active)
-- ✅ D1 Database for trade history and performance tracking (11 tables)
+- ✅ D1 Database for trade history and performance tracking (14 tables)
 - ✅ Previous indicator storage (cycleIndicators in broker-manager)
 - ✅ Z.AI LLM integration for signal reasoning
+- ✅ R2 Bucket enabled (`ymsa-data` — uncommented in wrangler.toml)
+- ✅ Backtesting engine (walk-forward, POST /api/backtest)
 
 ### Still Planned
 - [ ] Backtest UI in dashboard (currently API-only via POST /api/backtest)
-- [ ] R2 Bucket for historical data storage (backtest datasets)
 - [ ] Durable Objects for persistent orchestrator state across invocations
 - [ ] Full ADF cointegration test (replace variance ratio proxy)
 - [ ] WhatsApp and email alert channels
 - [ ] Glassnode integration for on-chain crypto metrics (NVT, exchange flows)
 - [ ] Custom watchlist management via Telegram bot commands
-- [ ] Backtesting engine for signal validation
 - [ ] Live (non-paper) Alpaca execution mode
 - [ ] Options pricing engine (Black-Scholes, Greeks)
 - [ ] Portfolio heat map visualization
+- [ ] Alpaca native `trailing_stop` order type (GAP-007)
+- [ ] Intraday 5-min data for SL/TP resolution (GAP-027)
+- [ ] Finnhub insider trading data integration (GAP-025)
+- [ ] FRED additional macro indicators: BAA10Y, T10Y3M, M2SL, ICSA (GAP-026)
+- [ ] FinViz screener wired into cron pipeline (GAP-028)
+- [ ] Backtester Kelly sizing alignment with live sizing (GAP-029)
+- [ ] Walk-forward optimization (GAP-030)
+- [ ] Full structured logging rollout (replace all 50+ console.log sites) (GAP-032)
+- [ ] Dedup map memory leak fix (GAP-033)
+- [ ] Z.AI health stats persistence to D1 (GAP-004)
+- [ ] Engine stats persistence to KV (GAP-018)
+- [ ] Engine probation D1 persistence wiring (GAP-019 — table created, logic not wired)
 
 ### Recently Completed
 - ✅ **Win/Loss Alert Tracker** — Every Telegram alert logged to D1 `telegram_alerts` table with full trade setup. Dashboard table with filters (ALL/PENDING/WIN/LOSS/BREAKEVEN/EXPIRED), click-to-open modal with trade details, manual outcome marking.
@@ -1074,6 +1142,14 @@ node .\node_modules\vitest\vitest.mjs run
 - ✅ **6 Critical Trading Defect Fixes** (commit `6631c25`) — (1) Event Driven R:R 0.80→2.25 (SL atr×2, TP atr×4.5), (2) Options R:R 1.33→2.33 (TP atr×3.5), (3) Simulator confidence ≥85 gate, (4) Position limits enforced via D1 queries (maxOpen=8, maxDaily=15), (5) Contradictory position blocking (no BUY+SELL same symbol), (6) Dynamic win rate from last 50 closed trades (clamped 30%-80%).
 - ✅ **Owner Report** (commit `46b2158`) — OWNER-REPORT-2025-07-14.md: structured brokers' morning meeting, senior leadership audit, 6 root causes identified, 6 fixes implemented, validation results, expected impact projections, forward recommendations.
 - ✅ **Cross-Validation Layer** (commit `2d63cde`) — 7-layer `data-validator.ts` (~550 lines): quote structural validation, indicator consistency, cross-source price agreement, signal conflict detection, trade param validation, env threshold checks, aggregate quality scoring (weighted 0-100, min 60 to pass). Z.AI `validateTradeSetup()` APPROVE/REJECT gate before every trade alert. Z.AI `detectDataAnomalies()` sampled 15% of stocks. Integrated into cron-handler (scan-time validation) and broker-manager (pre-send gate). 35 new tests, 78 total passing.
+- ✅ **v3.3 Production Gap Sprint — 22 of 33 Gaps Fixed** (April 4-5, 2026):
+  - **P0 (5/5 fixed):** GAP-001 Z.AI 70B model upgrade, GAP-003 feedback loop (D1→few-shot→validation prompt), GAP-005 trailing stops integrated into engine+simulator, GAP-010 express lane bypass (conf≥90, R:R≥2.5, regime-aligned), GAP-017 D1 config table with hardcoded safety ceilings + tier presets A/B/C
+  - **P1 (9/11 fixed):** GAP-002 max_tokens 800/1000/300 per model, GAP-006 fill confirmation polling, GAP-008 margin leverage (2x on 3-engine consensus, str≥85), GAP-011 regime-adaptive confidence (VIX-based thresholds), GAP-012 symbol truncation removed (all .slice() calls), GAP-014 Tier 2 active scanning (15 Healthcare/Energy/Consumer/Industrial/SaaS stocks), GAP-015 correlation check wired into flush-cycle, GAP-016 VIX risk adjustment in position sizer, GAP-031 structured error handling (enhanced logger.ts)
+  - **P2 (4/10 fixed):** GAP-009 order modification (modifyOrder added to alpaca.ts), GAP-013 quick scan IMPORTANT signals, GAP-021 R2 bucket enabled, GAP-023 KV OHLCV caching (in-memory 5min + KV 15min TTL)
+  - **P3 (1/7 fixed):** GAP-020 CPU limits configured (cpu_ms=300000)
+  - **Remaining (11 gaps):** GAP-004 (P2: AI health D1 persistence), GAP-007 (P1: Alpaca native trailing_stop), GAP-018 (P2: engine stats KV), GAP-019 (P2: probation D1 wiring), GAP-022 (P3: Durable Objects), GAP-025 (P2: Finnhub insider), GAP-026 (P2: FRED macro), GAP-027 (P1: intraday 5-min data), GAP-028 (P2: FinViz screener), GAP-029 (P2: backtester Kelly), GAP-030 (P3: walk-forward), GAP-032 (P3: full structured logging rollout, partially done), GAP-033 (P3: dedup map leak)
+  - **Files modified (20+):** wrangler.toml, z-engine.ts, feedback.ts (NEW), config-queries.ts (NEW), migrate-v3.3.sql (NEW), cron-handler.ts, market-scans.ts, engine-scans.ts, merge-and-plan.ts, engine.ts, simulator.ts, alpaca.ts, flush-cycle.ts, regime.ts, yahoo-finance.ts, logger.ts, public.ts, queries.ts, trade-queries.ts, z-engine.test.ts
+  - **Verification:** 0 TSC errors, 110/110 tests passing
 
 ---
 

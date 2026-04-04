@@ -119,7 +119,7 @@ export type IndicatorType =
   | 'ICHIMOKU_SPAN_B';
 
 export type Timeframe = '1min' | '5min' | '15min' | '1h' | '4h' | 'daily' | 'weekly' | 'monthly';
-export type DataSource = 'alpha_vantage' | 'finnhub' | 'taapi' | 'yahoo_finance' | 'finviz' | 'coingecko' | 'dexscreener';
+export type DataSource = 'alpha_vantage' | 'finnhub' | 'taapi' | 'yahoo_finance' | 'finviz' | 'coingecko' | 'dexscreener' | 'tradingview' | 'cnbc' | 'marketwatch' | 'stocktwits' | 'sec_edgar';
 
 /**
  * Fibonacci retracement calculation result

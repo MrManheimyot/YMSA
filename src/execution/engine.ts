@@ -3,11 +3,19 @@
 // Central pipeline that converts analysis signals into live trades
 
 import type { Env } from '../types';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Exec');
 import { calculatePositionSize, calculateATRStop } from '../analysis/position-sizer';
-import { submitBracketOrder, getAccount } from '../api/alpaca';
+import { submitBracketOrder, getAccount, getOrder, submitTrailingStopOrder } from '../api/alpaca';
 import { insertTrade, upsertPosition, insertSignal, closeTrade, generateId, getOpenTrades, getRecentTrades } from '../db/queries';
+import { getConfig } from '../db/queries';
 import type { TradeRecord } from '../db/queries';
 import { reviewTrade, isZAiAvailable } from '../ai/z-engine';
+import { createTrailingState, serializeTrailingState } from './trailing';
+import { getCombinedBoost } from '../analysis/news-boost';
+import { vixRiskAdjustment } from '../agents/risk-controller/risk-checker';
+import * as yahooFinance from '../api/yahoo-finance';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -60,7 +68,28 @@ const DEFAULT_RISK_LIMITS: RiskLimits = {
   },
 };
 
-// ─── Engine Stats (in-memory for single cron run) ────────────
+/**
+ * Build risk limits from D1 config (or fallback to defaults).
+ */
+export function buildRiskLimits(): RiskLimits {
+  return {
+    maxOpenPositions: getConfig('max_open_positions'),
+    maxDailyTrades: getConfig('max_daily_trades'),
+    maxPositionPct: getConfig('max_position_pct'),
+    maxPortfolioRisk: getConfig('max_portfolio_risk'),
+    minStrength: 60,
+    engineBudgets: {
+      MTF_MOMENTUM: getConfig('engine_budget_mtf_momentum'),
+      SMART_MONEY: getConfig('engine_budget_smart_money'),
+      STAT_ARB: getConfig('engine_budget_stat_arb'),
+      OPTIONS: getConfig('engine_budget_options'),
+      CRYPTO_DEFI: getConfig('engine_budget_crypto_defi'),
+      EVENT_DRIVEN: getConfig('engine_budget_event_driven'),
+    },
+  };
+}
+
+// ─── Engine Stats (KV-persisted for cross-invocation accuracy) ────────────
 
 interface EngineStats {
   dailyTrades: number;
@@ -68,6 +97,46 @@ interface EngineStats {
 }
 
 const engineStatsCache = new Map<string, EngineStats>();
+let _statsKV: KVNamespace | null = null;
+let _statsLoaded = false;
+
+/**
+ * GAP-018: Initialize KV store for engine stats persistence.
+ */
+export function setEngineStatsKV(kv: KVNamespace): void {
+  _statsKV = kv;
+}
+
+/**
+ * GAP-018: Load today's engine stats from KV. Call once at cron boot.
+ */
+export async function loadEngineStatsFromKV(): Promise<void> {
+  if (!_statsKV || _statsLoaded) return;
+  const today = new Date().toISOString().split('T')[0];
+  try {
+    const raw = await _statsKV.get(`engine-stats:${today}`, 'json');
+    if (raw && typeof raw === 'object') {
+      const data = raw as Record<string, EngineStats>;
+      for (const [engineId, stats] of Object.entries(data)) {
+        engineStatsCache.set(engineId, stats);
+      }
+    }
+    _statsLoaded = true;
+  } catch { /* KV miss — start fresh */ }
+}
+
+/**
+ * GAP-018: Persist engine stats to KV. Call at end of cron cycle.
+ */
+export async function persistEngineStatsToKV(): Promise<void> {
+  if (!_statsKV) return;
+  const today = new Date().toISOString().split('T')[0];
+  const data: Record<string, EngineStats> = {};
+  for (const [k, v] of engineStatsCache) data[k] = v;
+  try {
+    await _statsKV.put(`engine-stats:${today}`, JSON.stringify(data), { expirationTtl: 86400 });
+  } catch { /* best-effort */ }
+}
 
 function getEngineStats(engineId: string): EngineStats {
   if (!engineStatsCache.has(engineId)) {
@@ -104,12 +173,26 @@ export async function executeSignal(
       acted_on: 0,
     });
   } catch (e) {
-    console.error(`[Exec] Failed to record signal: ${e}`);
+    logger.error(`Failed to record signal: ${e}`);
   }
 
   // ── Pre-flight Risk Checks ──
-  if (strength < limits.minStrength) {
-    return { success: false, skipped: `Strength ${strength} < min ${limits.minStrength}` };
+  // News/social sentiment boost (Superpower Data Layer)
+  let boostedStrength = strength;
+  if (env.DB) {
+    try {
+      const { boost, reasons } = await getCombinedBoost(env.DB, symbol, direction);
+      if (boost !== 0) {
+        boostedStrength = Math.max(0, Math.min(100, strength + boost));
+        if (reasons.length > 0) {
+          logger.info(`News boost ${symbol}: ${strength}→${boostedStrength} (${reasons.join('; ')})`);
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  if (boostedStrength < limits.minStrength) {
+    return { success: false, skipped: `Strength ${boostedStrength} < min ${limits.minStrength}` };
   }
 
   // ── Position & Daily Trade Limits ──
@@ -134,7 +217,7 @@ export async function executeSignal(
         return { success: false, skipped: `Daily trades ${todayTradeCount} >= max ${limits.maxDailyTrades}` };
       }
     } catch (e) {
-      console.error(`[Exec] Position limit check failed: ${e}`);
+      logger.error(`Position limit check failed: ${e}`);
     }
   }
 
@@ -173,7 +256,30 @@ export async function executeSignal(
     maxPositionPct: limits.maxPositionPct,
   });
 
-  if (size.shares <= 0) {
+  // ── GAP-016: VIX-based position size adjustment ──
+  let adjustedShares = size.shares;
+  try {
+    const vixQuote = await yahooFinance.getQuote('^VIX');
+    if (vixQuote && vixQuote.price > 0) {
+      const vixAdj = vixRiskAdjustment(vixQuote.price);
+      adjustedShares = Math.max(1, Math.floor(size.shares * vixAdj.positionSizeMultiplier));
+      if (adjustedShares !== size.shares) {
+        logger.info(`VIX=${vixQuote.price.toFixed(1)} → size ${size.shares}→${adjustedShares}`, { multiplier: vixAdj.positionSizeMultiplier });
+      }
+    }
+  } catch { /* VIX fetch failed — use original size */ }
+
+  // ── GAP-008: Margin leverage for high-conviction multi-engine signals ──
+  const engineCount = (signal.metadata?.engineCount as number) || 1;
+  const maxLeverage: number = getConfig('max_leverage');
+  if (engineCount >= 3 && strength >= 85 && maxLeverage > 1) {
+    const leverage = Math.min(maxLeverage, 1 + (engineCount - 2) * 0.5); // 3→1.5x, 4→2x
+    const leveraged = Math.floor(adjustedShares * leverage);
+    logger.info(`Margin: ${engineCount} engines, str=${strength} → ${leverage}x leverage`, { from: adjustedShares, to: leveraged });
+    adjustedShares = leveraged;
+  }
+
+  if (adjustedShares <= 0) {
     return { success: false, skipped: 'Position size calculated to 0 shares' };
   }
 
@@ -181,7 +287,7 @@ export async function executeSignal(
   const order = await submitBracketOrder(
     {
       symbol,
-      qty: size.shares,
+      qty: adjustedShares,
       side: direction === 'BUY' ? 'buy' : 'sell',
       type: 'market',
       time_in_force: 'day',
@@ -195,21 +301,43 @@ export async function executeSignal(
     return { success: false, error: 'Broker rejected order' };
   }
 
+  // ── Fill Confirmation — check order status ──
+  let filledPrice = entryPrice;
+  let fillStatus = order.status;
+  try {
+    const confirmed = await getOrder(order.id, env);
+    if (confirmed) {
+      fillStatus = confirmed.status;
+      if (confirmed.filled_avg_price) {
+        filledPrice = parseFloat(confirmed.filled_avg_price);
+      }
+      if (fillStatus === 'rejected' || fillStatus === 'canceled') {
+        logger.error(`Order ${order.id} was ${fillStatus} — not recording trade`);
+        return { success: false, error: `Order ${fillStatus} by broker` };
+      }
+    }
+  } catch (e) {
+    logger.error(`Fill confirmation check failed: ${e}`);
+  }
+
   // ── Record Trade in D1 ──
   const tradeId = generateId('trd');
+  const actualEntry = filledPrice || entryPrice;
+  const trailState = createTrailingState(actualEntry, stopCalc.stopLoss, atr, direction);
   try {
     await insertTrade(env.DB, {
       id: tradeId,
       engine_id: engineId,
       symbol,
       side: direction,
-      qty: size.shares,
-      entry_price: entryPrice,
+      qty: adjustedShares,
+      entry_price: actualEntry,
       stop_loss: stopCalc.stopLoss,
       take_profit: stopCalc.takeProfit,
       status: 'OPEN',
       opened_at: Date.now(),
       broker_order_id: order.id,
+      trailing_state: serializeTrailingState(trailState),
     });
 
     await upsertPosition(env.DB, {
@@ -217,9 +345,9 @@ export async function executeSignal(
       symbol,
       engine_id: engineId,
       side: direction === 'BUY' ? 'LONG' : 'SHORT',
-      qty: size.shares,
-      avg_entry: entryPrice,
-      current_price: entryPrice,
+      qty: adjustedShares,
+      avg_entry: actualEntry,
+      current_price: actualEntry,
       unrealized_pnl: 0,
       stop_loss: stopCalc.stopLoss,
       take_profit: stopCalc.takeProfit,
@@ -229,7 +357,7 @@ export async function executeSignal(
     // Mark signal as acted on
     await env.DB.prepare(`UPDATE signals SET acted_on = 1 WHERE id = ?`).bind(signalId).run();
   } catch (e) {
-    console.error(`[Exec] DB record error (order placed!): ${e}`);
+    logger.error(`DB record error (order placed!): ${e}`);
   }
 
   // Update stats
@@ -245,7 +373,7 @@ export async function executeSignal(
       `━━━━━━━━━━━━━━━━━━━━━━`,
       `Engine: ${engineId}`,
       `Signal: ${signalType} (str: ${strength})`,
-      `${direction} ${size.shares} shares @ $${entryPrice.toFixed(2)}`,
+      `${direction} ${adjustedShares} shares @ $${actualEntry.toFixed(2)}${filledPrice !== entryPrice ? ` (filled @ $${filledPrice.toFixed(2)})` : ''}`,
       `SL: $${stopCalc.stopLoss.toFixed(2)} | TP: $${stopCalc.takeProfit.toFixed(2)}`,
       `Risk: $${size.riskAmount.toFixed(0)} (${size.positionPct.toFixed(1)}% equity)`,
       `R:R: 1:${size.rewardRiskRatio.toFixed(1)}`,
@@ -258,10 +386,10 @@ export async function executeSignal(
     success: true,
     tradeId,
     orderId: order.id,
-    shares: size.shares,
+    shares: adjustedShares,
     symbol,
     direction,
-    entryPrice,
+    entryPrice: actualEntry,
     engineId,
   };
 }
@@ -349,7 +477,7 @@ export async function closeTradeWithReview(
         engine: trade.engine_id,
         reason: trade.broker_order_id || 'N/A',
       });
-    } catch (err) { console.error('[Z.AI] Trade review failed:', err); }
+    } catch (err) { logger.error('Trade review failed', err); }
   }
 
   // Send Telegram notification
@@ -386,4 +514,65 @@ async function sendTelegramMessage(text: string, env: Env): Promise<void> {
       disable_web_page_preview: true,
     }),
   });
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GAP-007: Native Alpaca Trailing Stop for Live Trading
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Upgrade open trades from bracket SL to Alpaca native trailing_stop.
+ * Call from cron after fills are confirmed and price has moved favorably.
+ *
+ * For each open trade where the current price > entry + 1 ATR:
+ *   1. Cancel the existing bracket stop-loss leg
+ *   2. Submit a native trailing_stop order with trail_percent based on ATR
+ *
+ * This eliminates 5-minute latency from manual trail updates.
+ */
+export async function upgradeToNativeTrailingStops(env: Env): Promise<number> {
+  if (env.ALPACA_PAPER_MODE !== 'false') return 0; // Only for live trading
+
+  const openTrades = await getOpenTrades(env.DB);
+  let upgraded = 0;
+
+  for (const trade of openTrades) {
+    if (!trade.broker_order_id) continue;
+
+    try {
+      const quote = await yahooFinance.getQuote(trade.symbol);
+      if (!quote) continue;
+
+      const currentPrice = quote.price;
+      const entry = trade.entry_price;
+      const atrEstimate = Math.abs(trade.take_profit - trade.entry_price) / 3; // Reverse-engineer ATR from TP
+      const isBuy = trade.side === 'BUY';
+
+      // Only upgrade if price has moved favorably by at least 1 ATR
+      const favorableMove = isBuy
+        ? currentPrice - entry > atrEstimate
+        : entry - currentPrice > atrEstimate;
+      if (!favorableMove) continue;
+
+      // Calculate trail percent: 2 ATR / current price * 100
+      const trailPct = Math.max(1.0, Math.min(5.0, (atrEstimate * 2 / currentPrice) * 100));
+
+      // Submit native trailing stop
+      const trailOrder = await submitTrailingStopOrder({
+        symbol: trade.symbol,
+        qty: trade.qty,
+        side: isBuy ? 'sell' : 'buy', // Opposite side for exit
+        trailPercent: parseFloat(trailPct.toFixed(1)),
+      }, env);
+
+      if (trailOrder) {
+        upgraded++;
+        logger.info(`GAP-007: Upgraded ${trade.symbol} to native trailing stop (${trailPct.toFixed(1)}% trail)`);
+      }
+    } catch (err) {
+      logger.error(`Trail upgrade failed for ${trade.symbol}`, err);
+    }
+  }
+
+  return upgraded;
 }

@@ -46,16 +46,19 @@ VOLUME_SPIKE_MULTIPLIER = "1.5"
 CRYPTO_WATCHLIST = "bitcoin,ethereum,solana,cardano,polkadot"
 GOOGLE_CLIENT_ID = "121161777538-sm5bar8ufps6jtvll243rk29c9ppvrc0.apps.googleusercontent.com"
 
+# ─── Paid Plan CPU Limits (UNLOCK FULL POWER) ────────────────
+[limits]
+cpu_ms = 300_000       # 5 minutes per invocation (paid max)
+
 # ─── KV Namespaces ───────────────────────────────────────────
 [[kv_namespaces]]
 binding = "YMSA_CACHE"
 id = "a110e14c46e440dcad5a9f46a32e85b9"
 
 # ─── R2 Bucket ───────────────────────────────────────────────
-# Create with: wrangler r2 bucket create ymsa-data
-# [[r2_buckets]]
-# binding = "YMSA_DATA"
-# bucket_name = "ymsa-data"
+[[r2_buckets]]
+binding = "YMSA_DATA"
+bucket_name = "ymsa-data"
 
 # ─── Durable Objects (enable in Phase 2) ─────────────────────
 # [durable_objects]

@@ -4,6 +4,7 @@
 
 import type { Env } from '../types';
 import type { EngineId, RegimeType } from '../agents/types';
+import * as yahooFinance from '../api/yahoo-finance';
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -77,16 +78,20 @@ export async function detectRegime(env: Env): Promise<MarketRegime> {
 
     const suggestedEngines = getEnginesForRegime(regime, vix);
 
+    // GAP-017: Multi-asset regime confirmation — cross-reference broad market
+    const multiAssetAdj = await fetchMultiAssetConfirmation(regime, env);
+    const finalConfidence = Math.min(98, Math.max(20, confidence + multiAssetAdj));
+
     // Store in D1 for tracking
     if (env.DB) {
       const id = `reg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       const spyTrend = regime.includes('UP') ? 'BULLISH' : regime.includes('DOWN') ? 'BEARISH' : 'NEUTRAL';
       await env.DB.prepare(
         `INSERT INTO regime_history (id, regime, detected_at, vix_level, spy_trend, confidence) VALUES (?, ?, ?, ?, ?, ?)`
-      ).bind(id, regime, Date.now(), vix, spyTrend, confidence).run().catch(() => {});
+      ).bind(id, regime, Date.now(), vix, spyTrend, finalConfidence).run().catch(() => {});
     }
 
-    return { regime, confidence, vix, adx, emaGap, bollingerWidth, suggestedEngines, timestamp: Date.now() };
+    return { regime, confidence: finalConfidence, vix, adx, emaGap, bollingerWidth, suggestedEngines, timestamp: Date.now() };
   } catch (err) {
     console.error('[REGIME] Detection error:', err);
     return {
@@ -244,4 +249,49 @@ async function fetchSPYData(env: Env): Promise<SPYData> {
   }
 
   return result;
+}
+
+/**
+ * GAP-017: Multi-asset confirmation — check QQQ, IWM, TLT, GLD
+ * Returns confidence adjustment (-15 to +15) based on cross-market agreement.
+ */
+async function fetchMultiAssetConfirmation(regime: RegimeType, _env: Env): Promise<number> {
+  try {
+    const assets = ['QQQ', 'IWM', 'TLT', 'GLD'];
+    const quotes = await yahooFinance.getMultipleQuotes(assets);
+    if (quotes.length === 0) return 0;
+
+    let confirming = 0;
+    let diverging = 0;
+
+    for (const q of quotes) {
+      const bullish = q.changePercent > 0.3;
+      const bearish = q.changePercent < -0.3;
+
+      if (q.symbol === 'TLT' || q.symbol === 'GLD') {
+        // Safe-haven assets — inversely correlated with risk-on regimes
+        if (regime === 'TRENDING_UP' && bearish) confirming++;
+        else if (regime === 'TRENDING_UP' && bullish) diverging++;
+        else if (regime === 'TRENDING_DOWN' && bullish) confirming++;
+        else if (regime === 'TRENDING_DOWN' && bearish) diverging++;
+        else if (regime === 'VOLATILE' && bullish) confirming++;
+      } else {
+        // Risk assets — should move with SPY
+        if (regime === 'TRENDING_UP' && bullish) confirming++;
+        else if (regime === 'TRENDING_UP' && bearish) diverging++;
+        else if (regime === 'TRENDING_DOWN' && bearish) confirming++;
+        else if (regime === 'TRENDING_DOWN' && bullish) diverging++;
+        else if (regime === 'RANGING' && !bullish && !bearish) confirming++;
+      }
+    }
+
+    // +5 per confirming asset, -5 per diverging
+    const adjustment = (confirming * 5) - (diverging * 5);
+    if (adjustment !== 0) {
+      console.log(`[Regime] Multi-asset: ${confirming} confirm, ${diverging} diverge → adj ${adjustment > 0 ? '+' : ''}${adjustment}`);
+    }
+    return adjustment;
+  } catch {
+    return 0; // best-effort
+  }
 }

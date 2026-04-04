@@ -8,6 +8,17 @@ import type { StockQuote, OHLCV } from '../types';
 
 const BASE_URL = 'https://query1.finance.yahoo.com/v8/finance';
 
+// ─── In-memory OHLCV cache (lives for one cron invocation) ──
+const ohlcvCache = new Map<string, { data: OHLCV[]; ts: number }>();
+const OHLCV_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Optional KV store for cross-invocation caching
+let _kvCache: KVNamespace | null = null;
+
+export function setKVCache(kv: KVNamespace): void {
+  _kvCache = kv;
+}
+
 // Commodity symbol mapping for Yahoo Finance
 export const COMMODITY_SYMBOLS: Record<string, string> = {
   GOLD: 'GC=F',
@@ -117,6 +128,26 @@ export async function getOHLCV(
   range: string = '6mo',
   interval: string = '1d'
 ): Promise<OHLCV[]> {
+  const cacheKey = `ohlcv:${symbol}:${range}:${interval}`;
+
+  // Check in-memory cache
+  const memCached = ohlcvCache.get(cacheKey);
+  if (memCached && Date.now() - memCached.ts < OHLCV_CACHE_TTL_MS) {
+    return memCached.data;
+  }
+
+  // Check KV cache (GAP-023: all intervals, TTL varies by interval)
+  if (_kvCache) {
+    try {
+      const kvData = await _kvCache.get(cacheKey, 'json');
+      if (kvData) {
+        const parsed = kvData as OHLCV[];
+        ohlcvCache.set(cacheKey, { data: parsed, ts: Date.now() });
+        return parsed;
+      }
+    } catch { /* KV miss — fetch from API */ }
+  }
+
   try {
     const res = await fetch(
       `${BASE_URL}/chart/${encodeURIComponent(symbol)}?interval=${interval}&range=${range}`,
@@ -155,6 +186,20 @@ export async function getOHLCV(
         close,
         volume: volume || 0,
       });
+    }
+
+    // Cache the result
+    if (candles.length > 0) {
+      ohlcvCache.set(cacheKey, { data: candles, ts: Date.now() });
+      // GAP-023: Write to KV for all intervals with appropriate TTLs
+      if (_kvCache) {
+        const kvTtl = interval === '1d' ? 900           // 15 min for daily
+          : interval === '5m' ? 120                     // 2 min for 5-min bars
+          : interval === '15m' ? 300                    // 5 min for 15-min bars
+          : interval === '1h' ? 600                     // 10 min for hourly
+          : 900;                                        // 15 min default
+        _kvCache.put(cacheKey, JSON.stringify(candles), { expirationTtl: kvTtl }).catch(() => {});
+      }
     }
 
     return candles; // Most recent first

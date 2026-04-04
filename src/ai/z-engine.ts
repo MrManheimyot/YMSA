@@ -1,11 +1,16 @@
 // ─── Z.AI Engine — Runtime LLM Intelligence ─────────────────
-// Uses Cloudflare Workers AI for:
+// Uses Cloudflare Workers AI (Paid Plan) for:
 //   1. Signal synthesis — explain WHY in 2 sentences
 //   2. News sentiment — score headlines BULLISH/BEARISH/NEUTRAL
-//   3. Trade review — post-trade analysis
+//   3. Trade review — post-trade analysis with outcome learning
 //   4. Portfolio narrative — weekly human-readable summary
+//   5. Trade validation — multi-factor risk gate
+//   6. Data anomaly detection — spot suspicious patterns
 //
-// Model: @cf/meta/llama-3.1-8b-instruct (free tier)
+// Model Routing (Paid Plan):
+//   PRIMARY:   @cf/meta/llama-3.3-70b-instruct-fp8-fast  (validation, narrative)
+//   REASONING: @cf/deepseek-ai/deepseek-r1-distill-qwen-32b (review, anomalies)
+//   FAST:      @cf/meta/llama-3.1-8b-instruct-fast (synthesis, sentiment, alerts)
 
 import type { Env } from '../types';
 import type { MarketRegime } from '../analysis/regime';
@@ -38,22 +43,51 @@ interface AiResponse {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Core LLM Call
+// Model Routing
 // ═══════════════════════════════════════════════════════════════
 
-async function runLLM(ai: any, systemPrompt: string, userPrompt: string): Promise<string> {
+type ModelTier = 'PRIMARY' | 'REASONING' | 'FAST';
+
+const MODEL_MAP: Record<ModelTier, string> = {
+  PRIMARY: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  REASONING: '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+  FAST: '@cf/meta/llama-3.1-8b-instruct-fast',
+};
+
+const TOKEN_MAP: Record<ModelTier, number> = {
+  PRIMARY: 800,
+  REASONING: 1000,
+  FAST: 300,
+};
+
+const TEMP_MAP: Record<ModelTier, number> = {
+  PRIMARY: 0.2,
+  REASONING: 0.1,
+  FAST: 0.3,
+};
+
+// ═══════════════════════════════════════════════════════════════
+// Core LLM Call — model-routed
+// ═══════════════════════════════════════════════════════════════
+
+async function runLLM(
+  ai: any,
+  systemPrompt: string,
+  userPrompt: string,
+  tier: ModelTier = 'FAST',
+): Promise<string> {
   try {
-    const result: AiResponse = await ai.run('@cf/meta/llama-3.1-8b-instruct', {
+    const result: AiResponse = await ai.run(MODEL_MAP[tier], {
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
-      max_tokens: 300,
-      temperature: 0.3,
+      max_tokens: TOKEN_MAP[tier],
+      temperature: TEMP_MAP[tier],
     });
     return result?.response?.trim() || '';
   } catch (err) {
-    console.error('[Z.AI] LLM call failed:', err);
+    console.error(`[Z.AI] LLM call failed (${tier}):`, err);
     return '';
   }
 }
@@ -142,7 +176,7 @@ export async function reviewTrade(
 Entry $${trade.entry.toFixed(2)} → Exit $${trade.exit.toFixed(2)}.
 P&L: $${trade.pnl.toFixed(2)} (${trade.pnlPct >= 0 ? '+' : ''}${trade.pnlPct.toFixed(1)}%).
 Reason: ${trade.reason}.`;
-  return runLLM(ai, REVIEW_SYSTEM, prompt);
+  return runLLM(ai, REVIEW_SYSTEM, prompt, 'REASONING');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -169,7 +203,7 @@ export async function weeklyNarrative(
 Win rate: ${(data.winRate * 100).toFixed(0)}% across ${data.totalTrades} trades.
 Top winner: ${data.topWinner}. Top loser: ${data.topLoser}.
 Market regime: ${data.regime}. VIX: ${data.vix.toFixed(1)}.`;
-  return runLLM(ai, NARRATIVE_SYSTEM, prompt);
+  return runLLM(ai, NARRATIVE_SYSTEM, prompt, 'PRIMARY');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -203,6 +237,17 @@ REASON: one sentence explanation
 
 Only APPROVE if: data sources agree, indicators are consistent, risk:reward is sound, trade aligns with market regime. REJECT if any data looks stale, conflicting, or the setup has poor risk management. Be strict — false positives cost real money.`;
 
+// ─── Feedback Context (injected from D1 trade outcomes) ──────
+let _feedbackExamples: string = '';
+
+/**
+ * Set feedback examples for the validation prompt.
+ * Call this at cron start with recent trade outcomes from D1.
+ */
+export function setFeedbackExamples(examples: string): void {
+  _feedbackExamples = examples;
+}
+
 export interface ZAiValidation {
   verdict: 'APPROVE' | 'REJECT' | 'UNAVAILABLE';
   confidence: number;
@@ -221,6 +266,10 @@ export async function validateTradeSetup(
     ? `Regime: ${regime.regime}, VIX ${regime.vix.toFixed(0)}, ADX ${regime.adx?.toFixed(0) ?? '?'}, conf ${regime.confidence}%.`
     : 'Regime: unknown.';
 
+  const feedbackBlock = _feedbackExamples
+    ? `\nRECENT TRADE OUTCOMES (learn from these):\n${_feedbackExamples}\n`
+    : '';
+
   const prompt = `TRADE SETUP TO VALIDATE:
 ${trade.direction} ${trade.symbol} at $${trade.entry.toFixed(2)}
 Engines: ${trade.engines.join(', ')} (${trade.engines.length} engines)
@@ -229,7 +278,7 @@ SL: $${trade.stopLoss.toFixed(2)}, TP1: $${trade.tp1.toFixed(2)}
 R:R: ${trade.stopLoss !== trade.entry ? (Math.abs(trade.tp1 - trade.entry) / Math.abs(trade.entry - trade.stopLoss)).toFixed(2) : 'N/A'}
 Conflicting engines: ${trade.conflicting ? 'YES' : 'NO'}
 ${regimeCtx}
-
+${feedbackBlock}
 DATA QUALITY REPORT:
 Overall score: ${dataQuality.overallScore}/100
 Critical issues: ${dataQuality.failCount}
@@ -237,7 +286,7 @@ ${dataQuality.issues.length > 0 ? 'Issues:\n' + dataQuality.issues.slice(0, 5).m
 
 Reasons: ${trade.reasons.slice(0, 3).join(' | ')}`;
 
-  const raw = await runLLM(ai, VALIDATE_SYSTEM, prompt);
+  const raw = await runLLM(ai, VALIDATE_SYSTEM, prompt, 'PRIMARY');
   if (!raw) return { verdict: 'UNAVAILABLE', confidence: 0, reason: 'Z.AI returned empty response' };
 
   // Parse structured response
@@ -294,7 +343,7 @@ RSI: ${data.rsi?.toFixed(1) ?? 'N/A'}, MACD: ${data.macd?.toFixed(4) ?? 'N/A'}, 
 EMA50: ${data.ema50 ? '$' + data.ema50.toFixed(2) : 'N/A'}, EMA200: ${data.ema200 ? '$' + data.ema200.toFixed(2) : 'N/A'}
 Regime: ${data.regime ?? 'N/A'}, VIX: ${data.vix?.toFixed(1) ?? 'N/A'}`;
 
-  const raw = await runLLM(ai, ANOMALY_SYSTEM, prompt);
+  const raw = await runLLM(ai, ANOMALY_SYSTEM, prompt, 'REASONING');
   if (!raw) return [];
 
   const anomalies: DataAnomaly[] = [];
@@ -464,4 +513,92 @@ export function formatZAiHealthReport(stats: ZAiHealthStats): string {
   }
 
   return lines.join('\n');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GAP-004: Persist Z.AI health stats to D1 (hourly aggregation)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Persist current health stats to D1 z_ai_health table (hourly bucket).
+ * Call at the end of each cron cycle to accumulate across invocations.
+ */
+export async function persistHealthStats(db: D1Database): Promise<void> {
+  const stats = getZAiHealthStats();
+  if (stats.totalCalls === 0) return; // nothing to persist
+
+  const hour = new Date().toISOString().slice(0, 13); // e.g. 2026-04-04T18
+  try {
+    await db.prepare(
+      `INSERT INTO z_ai_health (hour, total_calls, successful_calls, failed_calls, approvals, rejections, unavailable, avg_response_length, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(hour) DO UPDATE SET
+         total_calls = total_calls + excluded.total_calls,
+         successful_calls = successful_calls + excluded.successful_calls,
+         failed_calls = failed_calls + excluded.failed_calls,
+         approvals = approvals + excluded.approvals,
+         rejections = rejections + excluded.rejections,
+         unavailable = unavailable + excluded.unavailable,
+         avg_response_length = (avg_response_length + excluded.avg_response_length) / 2,
+         updated_at = excluded.updated_at`
+    ).bind(
+      hour,
+      stats.totalCalls,
+      stats.successfulCalls,
+      stats.failedCalls,
+      stats.approvals,
+      stats.rejections,
+      stats.unavailable,
+      stats.avgResponseLength,
+      Date.now(),
+    ).run();
+  } catch (err) {
+    console.error('[Z.AI] Failed to persist health stats:', err);
+  }
+}
+
+/**
+ * Load recent health stats from D1 (last 24 hours).
+ * Used to detect persistent degradation across cron invocations.
+ */
+export async function loadHealthHistory(db: D1Database): Promise<{
+  totalCalls24h: number;
+  failureRate24h: number;
+  approvalRate24h: number;
+  alerts: string[];
+}> {
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 13);
+    const result = await db.prepare(
+      `SELECT SUM(total_calls) as tc, SUM(successful_calls) as sc, SUM(failed_calls) as fc,
+              SUM(approvals) as ap, SUM(rejections) as rj, SUM(unavailable) as ua
+       FROM z_ai_health WHERE hour >= ?`
+    ).bind(cutoff).first() as any;
+
+    if (!result || !result.tc) {
+      return { totalCalls24h: 0, failureRate24h: 0, approvalRate24h: 0, alerts: [] };
+    }
+
+    const tc = result.tc || 0;
+    const fc = result.fc || 0;
+    const ap = result.ap || 0;
+    const rj = result.rj || 0;
+    const ua = result.ua || 0;
+    const failureRate = tc > 0 ? fc / tc : 0;
+    const validTotal = ap + rj + ua;
+    const approvalRate = validTotal > 0 ? ap / validTotal : 0;
+
+    const alerts: string[] = [];
+    if (tc >= 10 && failureRate > 0.15) {
+      alerts.push(`🚨 Z.AI 24h failure rate ${(failureRate * 100).toFixed(0)}% (${fc}/${tc})`);
+    }
+    if (validTotal >= 10 && approvalRate > 0.95) {
+      alerts.push(`⚠️ Z.AI 24h rubber-stamping: ${(approvalRate * 100).toFixed(0)}% approved`);
+    }
+
+    return { totalCalls24h: tc, failureRate24h: failureRate, approvalRate24h: approvalRate, alerts };
+  } catch (err) {
+    console.error('[Z.AI] Failed to load health history:', err);
+    return { totalCalls24h: 0, failureRate24h: 0, approvalRate24h: 0, alerts: [] };
+  }
 }

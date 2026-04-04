@@ -7,6 +7,7 @@ import type { Env } from '../types';
 import * as yahooFinance from '../api/yahoo-finance';
 import { computeIndicators } from '../analysis/indicators';
 import { detectSignals } from '../analysis/signals';
+import { calculateHalfKelly } from '../analysis/position-sizer';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -233,9 +234,27 @@ export async function runBacktest(
             exitIdx = filtered.length - 1;
           }
 
+          // GAP-029: Kelly-based position sizing (matches live pipeline)
+          // Compute running win rate from completed trades
+          const completedTrades = allTrades.filter(t => t.exitDate);
+          const wins = completedTrades.filter(t => t.outcome === 'WIN').length;
+          const losses = completedTrades.filter(t => t.outcome === 'LOSS').length;
+          const runningWinRate = completedTrades.length >= 5
+            ? wins / completedTrades.length
+            : 0.5; // default before enough samples
+          const avgWinPct = completedTrades.length >= 5
+            ? completedTrades.filter(t => t.pnlPct > 0).reduce((s, t) => s + t.pnlPct, 0) / Math.max(1, wins)
+            : cfg.takeProfitPct;
+          const avgLossPct = completedTrades.length >= 5
+            ? Math.abs(completedTrades.filter(t => t.pnlPct < 0).reduce((s, t) => s + t.pnlPct, 0) / Math.max(1, losses))
+            : cfg.stopLossPct;
+
+          const kellyFrac = calculateHalfKelly(runningWinRate, avgWinPct, avgLossPct);
+          const positionFrac = Math.max(0.005, Math.min(kellyFrac, 0.10)); // floor 0.5%, cap 10%
+          const shares = (equity * positionFrac) / entry;
           const pnl = isBuy
-            ? (exitPrice - entry) * (cfg.initialCapital * 0.02 / entry) // 2% of capital per trade
-            : (entry - exitPrice) * (cfg.initialCapital * 0.02 / entry);
+            ? (exitPrice - entry) * shares
+            : (entry - exitPrice) * shares;
           const pnlPct = isBuy
             ? ((exitPrice - entry) / entry) * 100
             : ((entry - exitPrice) / entry) * 100;

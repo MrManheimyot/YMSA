@@ -78,7 +78,7 @@ describe('synthesizeSignal', () => {
     const result = await synthesizeSignal(ai, baseTrade, baseRegime);
     expect(result).toContain('Institutional buying');
     expect(ai.run).toHaveBeenCalledTimes(1);
-    expect(ai.run).toHaveBeenCalledWith('@cf/meta/llama-3.1-8b-instruct', expect.objectContaining({
+    expect(ai.run).toHaveBeenCalledWith('@cf/meta/llama-3.1-8b-instruct-fast', expect.objectContaining({
       max_tokens: 300,
       temperature: 0.3,
     }));

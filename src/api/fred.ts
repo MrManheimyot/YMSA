@@ -18,6 +18,9 @@ export const FRED_SERIES = {
   TREASURY_10Y: 'DGS10',
   TREASURY_2Y: 'DGS2',
   YIELD_SPREAD: 'T10Y2Y',       // 10Y - 2Y (recession indicator)
+  YIELD_SPREAD_3M: 'T10Y3M',    // GAP-026: 10Y - 3M (complementary recession indicator)
+  CREDIT_SPREAD: 'BAA10Y',      // GAP-026: Baa corporate - 10Y treasury (credit risk)
+  MONEY_SUPPLY_M2: 'M2SL',      // GAP-026: M2 money supply (liquidity indicator)
   USD_INDEX: 'DTWEXBGS',
   VIX: 'VIXCLS',
   OIL_WTI: 'DCOILWTICO',
@@ -96,6 +99,9 @@ export async function getMacroDashboard(apiKey: string): Promise<MacroIndicator[
     FRED_SERIES.TREASURY_10Y,
     FRED_SERIES.TREASURY_2Y,
     FRED_SERIES.YIELD_SPREAD,
+    FRED_SERIES.YIELD_SPREAD_3M,    // GAP-026
+    FRED_SERIES.CREDIT_SPREAD,       // GAP-026
+    FRED_SERIES.MONEY_SUPPLY_M2,     // GAP-026
     FRED_SERIES.VIX,
     FRED_SERIES.UNEMPLOYMENT,
     FRED_SERIES.OIL_WTI,
@@ -135,5 +141,59 @@ export async function checkYieldCurve(apiKey: string): Promise<{
       : spread.value < 0.5
         ? '🟡 Yield curve flattening — watch closely'
         : '🟢 Yield curve normal',
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// GAP-026: Comprehensive Recession Indicator Dashboard
+// ═══════════════════════════════════════════════════════════════
+
+export interface RecessionIndicators {
+  yieldCurveInverted: boolean;     // T10Y2Y < 0
+  shortEndInverted: boolean;       // T10Y3M < 0
+  creditSpreadWidening: boolean;   // BAA10Y > 3.0
+  m2Contracting: boolean;          // M2 YoY change < 0
+  claimsRising: boolean;           // ICSA > 300K
+  recessionScore: number;          // 0-100 (higher = more risk)
+  signals: string[];
+}
+
+/**
+ * Comprehensive recession risk assessment using multiple FRED indicators.
+ * Score 0-100: 0 = no risk, 100 = full recession conditions.
+ */
+export async function getRecessionIndicators(apiKey: string): Promise<RecessionIndicators | null> {
+  const [yieldSpread, shortSpread, creditSpread, claims] = await Promise.all([
+    getLatestValue(FRED_SERIES.YIELD_SPREAD, apiKey),
+    getLatestValue(FRED_SERIES.YIELD_SPREAD_3M, apiKey),
+    getLatestValue(FRED_SERIES.CREDIT_SPREAD, apiKey),
+    getLatestValue(FRED_SERIES.INITIAL_CLAIMS, apiKey),
+  ]);
+
+  if (!yieldSpread && !shortSpread) return null;
+
+  const yieldCurveInverted = (yieldSpread?.value ?? 1) < 0;
+  const shortEndInverted = (shortSpread?.value ?? 1) < 0;
+  const creditSpreadWidening = (creditSpread?.value ?? 2) > 3.0;
+  const claimsRising = (claims?.value ?? 200) > 300;
+  const m2Contracting = false; // M2 is monthly — change detection requires 2 values
+
+  let score = 0;
+  const signals: string[] = [];
+
+  if (yieldCurveInverted) { score += 25; signals.push('🔴 10Y-2Y inverted'); }
+  if (shortEndInverted) { score += 25; signals.push('🔴 10Y-3M inverted'); }
+  if (creditSpreadWidening) { score += 20; signals.push(`🟡 Credit spread ${creditSpread?.value.toFixed(2)}% (>3%)`);}
+  if (claimsRising) { score += 15; signals.push(`🟡 Initial claims ${(claims?.value ?? 0).toFixed(0)}K (>300K)`); }
+  if (signals.length === 0) signals.push('🟢 No recession signals');
+
+  return {
+    yieldCurveInverted,
+    shortEndInverted,
+    creditSpreadWidening,
+    m2Contracting,
+    claimsRising,
+    recessionScore: Math.min(100, score),
+    signals,
   };
 }

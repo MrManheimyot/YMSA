@@ -31,7 +31,8 @@ CREATE TABLE trades (
   pnl_pct REAL,
   opened_at INTEGER NOT NULL,
   closed_at INTEGER,
-  broker_order_id TEXT
+  broker_order_id TEXT,
+  trailing_state TEXT
 );
 
 CREATE INDEX idx_trades_engine ON trades(engine_id);
