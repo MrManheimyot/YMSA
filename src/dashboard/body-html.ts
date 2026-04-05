@@ -377,8 +377,45 @@ export const DASHBOARD_BODY = `
             <th class="sortable" data-sort="age" onclick="sortWLTable(this)">Age</th>
             <th>Outcome</th>
             <th class="sortable" data-sort="outcome_pnl_pct" onclick="sortWLTable(this)">P&L</th>
+            <th>Actions</th>
           </tr></thead>
-          <tbody id="wl-body"><tr><td colspan="12" class="loading">Loading alerts...</td></tr></tbody>
+          <tbody id="wl-body"><tr><td colspan="13" class="loading">Loading alerts...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <!-- v3.10: MY MANUAL TRADES                                 -->
+  <!-- ═══════════════════════════════════════════════════════ -->
+  <div class="section" id="manual-trades-section">
+    <div class="section-hdr">🎯 My Manual Trades <span id="mt-count" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px"></span></div>
+    <div class="card">
+      <!-- Manual Trades Stats -->
+      <div class="wl-stats-row" id="mt-stats-row">
+        <div class="wl-stat"><div class="label">Open Trades</div><div class="val" id="mt-open">0</div></div>
+        <div class="wl-stat"><div class="label">Realized P&L</div><div class="val" id="mt-realized">$0</div></div>
+        <div class="wl-stat"><div class="label">Unrealized P&L</div><div class="val" id="mt-unrealized">$0</div></div>
+        <div class="wl-stat"><div class="label">Win Rate</div><div class="val" id="mt-winrate">—</div></div>
+        <div class="wl-stat"><div class="label">Total P&L</div><div class="val" id="mt-total-pnl">$0</div></div>
+      </div>
+      <!-- Manual Trades Table -->
+      <div style="overflow-x:auto">
+        <table class="tbl" id="mt-table">
+          <thead><tr>
+            <th>Date</th>
+            <th>Symbol</th>
+            <th>Side</th>
+            <th>Qty</th>
+            <th>Entry</th>
+            <th>SL</th>
+            <th>TP</th>
+            <th>Current / Exit</th>
+            <th>P&L</th>
+            <th>Status</th>
+            <th>Close Trade</th>
+          </tr></thead>
+          <tbody id="mt-body"><tr><td colspan="11" class="empty">No manual trades yet. Click "I Took This" on any alert above to start tracking.</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -494,6 +531,61 @@ export const DASHBOARD_BODY = `
       </div>
       <div class="modal-body" id="modal-body">
         <div class="loading">Loading...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ QUICK TRADE MODAL ═══ -->
+  <div class="modal-overlay" id="take-trade-modal" onclick="if(event.target===this)closeTakeTradeModal()" style="display:none">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-header">
+        <h2 id="ttm-title">📝 Open Manual Trade</h2>
+        <button class="modal-close" onclick="closeTakeTradeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ttm-info" id="ttm-info"></div>
+        <div class="ttm-form">
+          <input type="hidden" id="ttm-alert-id">
+          <div class="ttm-field">
+            <label>Shares / Quantity</label>
+            <input type="number" id="ttm-qty" min="1" value="10" step="1" class="ttm-input">
+          </div>
+          <div class="ttm-field">
+            <label>Actual Entry Price <span style="color:var(--c-muted);font-size:11px">(leave blank to use alert price)</span></label>
+            <input type="number" id="ttm-entry" step="0.01" placeholder="Alert price" class="ttm-input">
+          </div>
+          <div class="ttm-actions">
+            <button class="action-btn action-btn-take" onclick="submitManualOpen()" style="width:100%;padding:10px;font-size:14px">✅ Confirm Trade</button>
+            <button class="action-btn action-btn-skip" onclick="closeTakeTradeModal()" style="width:100%;padding:8px;font-size:13px;margin-top:6px">Cancel</button>
+          </div>
+          <div id="ttm-status" style="margin-top:8px;font-size:12px;text-align:center"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ CLOSE TRADE MODAL ═══ -->
+  <div class="modal-overlay" id="close-trade-modal" onclick="if(event.target===this)closeCloseTradeModal()" style="display:none">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-header">
+        <h2 id="ctm-title">💰 Close Trade</h2>
+        <button class="modal-close" onclick="closeCloseTradeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="ttm-info" id="ctm-info"></div>
+        <div class="ttm-form">
+          <input type="hidden" id="ctm-trade-id">
+          <div id="ctm-quick-btns" class="ctm-quick-btns"></div>
+          <div class="ttm-field" style="margin-top:12px">
+            <label>Custom Exit Price</label>
+            <input type="number" id="ctm-price" step="0.01" placeholder="Enter exit price" class="ttm-input">
+          </div>
+          <div class="ttm-actions">
+            <button class="action-btn action-btn-sell" onclick="submitManualClose('CUSTOM')" style="width:100%;padding:10px;font-size:14px">💰 Close at Custom Price</button>
+            <button class="action-btn action-btn-skip" onclick="closeCloseTradeModal()" style="width:100%;padding:8px;font-size:13px;margin-top:6px">Cancel</button>
+          </div>
+          <div id="ctm-status" style="margin-top:8px;font-size:12px;text-align:center"></div>
+        </div>
       </div>
     </div>
   </div>

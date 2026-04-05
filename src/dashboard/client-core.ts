@@ -50,7 +50,7 @@ async function loadDashboard() {
   renderReliability(reliability);
   renderR1KUniverse(universe, candidates);
   renderSparkline(dailyPnl);
-  renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats);
+  renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats, dashData?.simTrades);
   renderPnlDashboard(dashData?.pnlDash, dashData?.simTrades);
   renderSimTrades(dashData?.simTrades);
   $('last-update').textContent = 'Updated: ' + new Date().toLocaleTimeString();

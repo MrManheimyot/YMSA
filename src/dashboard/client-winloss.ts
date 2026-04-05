@@ -6,6 +6,7 @@ export const CLIENT_WINLOSS_JS = `
 // ═══════════════════════════════════════════════════════════
 
 var allTgAlerts = [];
+var allManualTrades = [];
 var currentWLFilter = 'ALL';
 var wlSortKey = 'sent_at';
 var wlSortDir = 'desc';
@@ -35,8 +36,9 @@ function ageDays(sentAt) {
   return Math.floor((Date.now() - sentAt) / (24*60*60*1000));
 }
 
-function renderWinLossTable(data, stats) {
+function renderWinLossTable(data, stats, simTrades) {
   allTgAlerts = Array.isArray(data) ? data : (data && data.alerts ? data.alerts : []);
+  allManualTrades = (simTrades || []).filter(function(t) { return t.engine_id === 'MANUAL'; });
   if (stats) {
     $('wl-total').textContent = stats.total || '0';
     $('wl-wins').textContent = stats.wins || '0';
@@ -54,6 +56,7 @@ function renderWinLossTable(data, stats) {
     renderEngineAccuracy(stats.byEngine || []);
   }
   applyWLFilters();
+  renderManualTrades();
 }
 
 function renderEngineAccuracy(engines) {
@@ -113,9 +116,13 @@ function filterWLAlerts(filter) {
 function renderWLRows(alerts) {
   var body = $('wl-body');
   if (!alerts.length) {
-    body.innerHTML = '<tr><td colspan="12" class="empty">No alerts ' + (currentWLFilter !== 'ALL' ? 'with status ' + currentWLFilter : 'recorded yet') + '</td></tr>';
+    body.innerHTML = '<tr><td colspan="13" class="empty">No alerts ' + (currentWLFilter !== 'ALL' ? 'with status ' + currentWLFilter : 'recorded yet') + '</td></tr>';
     return;
   }
+  // Build map: alertId -> manual trade
+  var mtMap = {};
+  allManualTrades.forEach(function(t) { if (t.broker_order_id) mtMap[t.broker_order_id] = t; });
+
   body.innerHTML = alerts.map(function(a) {
     var pnl = a.outcome_pnl;
     var pnlPct = a.outcome_pnl_pct;
@@ -128,6 +135,25 @@ function renderWLRows(alerts) {
     var age = ageDays(a.sent_at);
     var ageClass = age <= 1 ? 'fresh' : age <= 4 ? 'aging' : 'old';
     var pnlDisplay = pnl != null ? fmtUsd(pnl) + (pnlPct != null ? ' <span style="opacity:.6;font-size:9px">(' + (pnlPct >= 0 ? '+' : '') + fmt(pnlPct,1) + '%)</span>' : '') : '—';
+
+    // Action buttons
+    var mt = mtMap[a.id];
+    var actionHtml;
+    if (mt && mt.status === 'OPEN') {
+      actionHtml = '<div class="wl-action-cell">' +
+        '<button class="action-btn action-btn-close" onclick="event.stopPropagation();openCloseTradeForm(\\'' + mt.id + '\\')">💰 Close</button>' +
+      '</div>';
+    } else if (mt && mt.status === 'CLOSED') {
+      actionHtml = '<span style="font-size:10px;color:var(--c-on-surface-2)">✅ Closed</span>';
+    } else if (a.outcome === 'PENDING' && a.entry_price > 0) {
+      actionHtml = '<div class="wl-action-cell">' +
+        '<button class="action-btn action-btn-take" onclick="event.stopPropagation();openTakeTradeForm(\\'' + a.id + '\\')">✅ Take</button>' +
+        '<button class="action-btn action-btn-skip" onclick="event.stopPropagation();skipAlert(\\'' + a.id + '\\')">⏭</button>' +
+      '</div>';
+    } else {
+      actionHtml = '';
+    }
+
     return '<tr class="wl-row" onclick="openAlertModal(\\'' + a.id + '\\')">' +
       '<td class="mono" style="font-size:10px">' + ts(a.sent_at) + '</td>' +
       '<td class="mono" style="font-weight:600">' + a.symbol + '</td>' +
@@ -141,6 +167,7 @@ function renderWLRows(alerts) {
       '<td><span class="age-badge ' + ageClass + '">' + age + 'd</span></td>' +
       '<td><span class="wl-outcome ' + a.outcome + '">' + a.outcome + '</span></td>' +
       '<td class="mono" style="color:' + pnlColor + '">' + pnlDisplay + '</td>' +
+      '<td onclick="event.stopPropagation()">' + actionHtml + '</td>' +
     '</tr>';
   }).join('');
 }
@@ -278,5 +305,186 @@ async function submitOutcome(id) {
   }
 }
 
-document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeAlertModal(); });
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') { closeAlertModal(); closeTakeTradeModal(); closeCloseTradeModal(); } });
+
+// ═══════════════════════════════════════════════════════════
+// MANUAL TRADE FUNCTIONS
+// ═══════════════════════════════════════════════════════════
+
+function openTakeTradeForm(alertId) {
+  var alert = allTgAlerts.find(function(a) { return a.id === alertId; });
+  if (!alert) return;
+  $('ttm-alert-id').value = alertId;
+  $('ttm-qty').value = '10';
+  $('ttm-entry').value = '';
+  $('ttm-entry').placeholder = alert.entry_price ? fmtUsd(alert.entry_price) : 'Alert price';
+  $('ttm-status').textContent = '';
+  $('ttm-info').innerHTML =
+    '<div class="ttm-symbol">' + alert.symbol + ' <span style="font-size:14px;color:' + (alert.action === 'BUY' ? 'var(--c-buy)' : 'var(--c-sell)') + '">' + alert.action + '</span></div>' +
+    '<div class="ttm-detail">Entry: ' + fmtUsd(alert.entry_price) + ' · SL: ' + (alert.stop_loss ? fmtUsd(alert.stop_loss) : '—') + ' · TP: ' + (alert.take_profit_1 ? fmtUsd(alert.take_profit_1) : '—') + '</div>' +
+    '<div class="ttm-detail">Engine: ' + shortEngine(alert.engine_id) + ' · Confidence: ' + alert.confidence + '/100</div>';
+  $('take-trade-modal').style.display = 'flex';
+}
+
+function closeTakeTradeModal() {
+  $('take-trade-modal').style.display = 'none';
+}
+
+async function submitManualOpen() {
+  var alertId = $('ttm-alert-id').value;
+  var qty = parseInt($('ttm-qty').value) || 0;
+  var actualEntry = parseFloat($('ttm-entry').value) || undefined;
+  if (qty <= 0) { $('ttm-status').innerHTML = '<span style="color:var(--c-sell)">Enter a valid quantity</span>'; return; }
+  $('ttm-status').innerHTML = '<span style="color:var(--c-primary)">Opening trade...</span>';
+  try {
+    var res = await fetch(BASE + '/api/manual-trade-open', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({ alertId: alertId, qty: qty, actualEntry: actualEntry })
+    });
+    var data = await res.json();
+    if (res.ok && data.ok) {
+      $('ttm-status').innerHTML = '<span style="color:var(--c-buy)">✅ Trade opened! Refreshing...</span>';
+      setTimeout(function() { closeTakeTradeModal(); loadDashboard(); }, 800);
+    } else {
+      $('ttm-status').innerHTML = '<span style="color:var(--c-sell)">❌ ' + (data.error || 'Failed to open trade') + '</span>';
+    }
+  } catch (err) {
+    $('ttm-status').innerHTML = '<span style="color:var(--c-sell)">❌ ' + err.message + '</span>';
+  }
+}
+
+function openCloseTradeForm(tradeId) {
+  var trade = allManualTrades.find(function(t) { return t.id === tradeId; });
+  if (!trade) return;
+  $('ctm-trade-id').value = tradeId;
+  $('ctm-price').value = '';
+  $('ctm-status').textContent = '';
+  var meta = {};
+  try { meta = JSON.parse(trade.trailing_state || '{}'); } catch(e) {}
+
+  $('ctm-info').innerHTML =
+    '<div class="ttm-symbol">' + trade.symbol + ' <span style="font-size:14px;color:' + (trade.side === 'BUY' ? 'var(--c-buy)' : 'var(--c-sell)') + '">' + trade.side + '</span></div>' +
+    '<div class="ttm-detail">Entry: ' + fmtUsd(trade.entry_price) + ' · Qty: ' + trade.qty + ' · SL: ' + (trade.stop_loss ? fmtUsd(trade.stop_loss) : '—') + '</div>';
+
+  // Quick exit buttons
+  var btns = '';
+  if (trade.take_profit) {
+    btns += '<button class="ctm-quick-btn tp1" onclick="submitManualClose(\\'TP1\\', ' + trade.take_profit + ')"><span class="ctm-label">🎯 Hit TP1</span><span class="ctm-price">' + fmtUsd(trade.take_profit) + '</span></button>';
+  }
+  if (meta.take_profit_2) {
+    btns += '<button class="ctm-quick-btn tp2" onclick="submitManualClose(\\'TP2\\', ' + meta.take_profit_2 + ')"><span class="ctm-label">🎯 Hit TP2</span><span class="ctm-price">' + fmtUsd(meta.take_profit_2) + '</span></button>';
+  }
+  if (trade.stop_loss) {
+    btns += '<button class="ctm-quick-btn sl" onclick="submitManualClose(\\'SL\\', ' + trade.stop_loss + ')"><span class="ctm-label">🛑 Hit SL</span><span class="ctm-price">' + fmtUsd(trade.stop_loss) + '</span></button>';
+  }
+  $('ctm-quick-btns').innerHTML = btns;
+  $('close-trade-modal').style.display = 'flex';
+}
+
+function closeCloseTradeModal() {
+  $('close-trade-modal').style.display = 'none';
+}
+
+async function submitManualClose(exitType, price) {
+  var tradeId = $('ctm-trade-id').value;
+  var exitPrice = price || parseFloat($('ctm-price').value);
+  if (!exitPrice || exitPrice <= 0) { $('ctm-status').innerHTML = '<span style="color:var(--c-sell)">Enter a valid exit price</span>'; return; }
+  $('ctm-status').innerHTML = '<span style="color:var(--c-primary)">Closing trade...</span>';
+  try {
+    var res = await fetch(BASE + '/api/manual-trade-close', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({ tradeId: tradeId, exitPrice: exitPrice, exitType: exitType })
+    });
+    var data = await res.json();
+    if (res.ok && data.ok) {
+      var pnlMsg = data.pnl >= 0 ? '+' + fmtUsd(data.pnl) : fmtUsd(data.pnl);
+      $('ctm-status').innerHTML = '<span style="color:' + (data.pnl >= 0 ? 'var(--c-buy)' : 'var(--c-sell)') + '">💰 Closed! P&L: ' + pnlMsg + '</span>';
+      setTimeout(function() { closeCloseTradeModal(); loadDashboard(); }, 1200);
+    } else {
+      $('ctm-status').innerHTML = '<span style="color:var(--c-sell)">❌ ' + (data.error || 'Failed to close trade') + '</span>';
+    }
+  } catch (err) {
+    $('ctm-status').innerHTML = '<span style="color:var(--c-sell)">❌ ' + err.message + '</span>';
+  }
+}
+
+async function skipAlert(alertId) {
+  if (!confirm('Skip this alert? It will be marked as EXPIRED.')) return;
+  try {
+    var res = await fetch(BASE + '/api/telegram-alert-outcome', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({ id: alertId, outcome: 'EXPIRED', outcomeNotes: 'Manually skipped' })
+    });
+    if (res.ok) loadDashboard();
+  } catch (err) {
+    window.alert('Error: ' + err.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// MANUAL TRADES SECTION RENDERER
+// ═══════════════════════════════════════════════════════════
+
+function renderManualTrades() {
+  var open = allManualTrades.filter(function(t) { return t.status === 'OPEN'; });
+  var closed = allManualTrades.filter(function(t) { return t.status === 'CLOSED'; });
+  var totalRealized = closed.reduce(function(s, t) { return s + (t.pnl || 0); }, 0);
+  var wins = closed.filter(function(t) { return t.pnl > 0; }).length;
+
+  $('mt-count').textContent = '(' + allManualTrades.length + ' total)';
+  $('mt-open').textContent = open.length;
+  $('mt-realized').textContent = fmtUsd(totalRealized);
+  $('mt-realized').className = 'val ' + pnlClass(totalRealized);
+  $('mt-unrealized').textContent = '—';
+  $('mt-winrate').textContent = closed.length > 0 ? fmt(wins / closed.length * 100, 0) + '%' : '—';
+  $('mt-total-pnl').textContent = fmtUsd(totalRealized);
+  $('mt-total-pnl').className = 'val ' + pnlClass(totalRealized);
+
+  var body = $('mt-body');
+  if (!allManualTrades.length) {
+    body.innerHTML = '<tr><td colspan="11" class="empty">No manual trades yet. Click "✅ Take" on any alert above to start tracking.</td></tr>';
+    return;
+  }
+
+  // Show open first, then closed (most recent first)
+  var sorted = open.concat(closed).sort(function(a, b) {
+    if (a.status !== b.status) return a.status === 'OPEN' ? -1 : 1;
+    return (b.opened_at || 0) - (a.opened_at || 0);
+  });
+
+  body.innerHTML = sorted.map(function(t) {
+    var meta = {};
+    try { meta = JSON.parse(t.trailing_state || '{}'); } catch(e) {}
+    var pnl = t.pnl;
+    var pnlColor = pnl > 0 ? 'var(--c-buy)' : pnl < 0 ? 'var(--c-sell)' : 'var(--c-on-surface-2)';
+    var sideColor = t.side === 'BUY' ? 'var(--c-buy)' : 'var(--c-sell)';
+    var statusClass = t.status === 'OPEN' ? 'PENDING' : (pnl > 0 ? 'WIN' : pnl < 0 ? 'LOSS' : 'BREAKEVEN');
+    var tp = t.take_profit ? fmtUsd(t.take_profit) : '—';
+    if (meta.take_profit_2) tp += ' / ' + fmtUsd(meta.take_profit_2);
+    var exitOrCurrent = t.exit_price ? fmtUsd(t.exit_price) : '—';
+    var closeBtn = t.status === 'OPEN'
+      ? '<button class="action-btn action-btn-close" onclick="openCloseTradeForm(\\'' + t.id + '\\')">💰 Close</button>'
+      : '<span style="font-size:10px;color:var(--c-on-surface-2)">' + (t.closed_at ? ts(t.closed_at) : '—') + '</span>';
+
+    return '<tr>' +
+      '<td class="mono" style="font-size:10px">' + ts(t.opened_at) + '</td>' +
+      '<td class="mono" style="font-weight:600">' + t.symbol + '</td>' +
+      '<td style="color:' + sideColor + ';font-weight:600">' + t.side + '</td>' +
+      '<td class="mono">' + t.qty + '</td>' +
+      '<td class="mono">' + fmtUsd(t.entry_price) + '</td>' +
+      '<td class="mono">' + (t.stop_loss ? fmtUsd(t.stop_loss) : '—') + '</td>' +
+      '<td class="mono" style="font-size:10px">' + tp + '</td>' +
+      '<td class="mono">' + exitOrCurrent + '</td>' +
+      '<td class="mono" style="color:' + pnlColor + '">' + (pnl != null && t.status === 'CLOSED' ? fmtUsd(pnl) : '—') + '</td>' +
+      '<td><span class="wl-outcome ' + statusClass + '">' + t.status + '</span></td>' +
+      '<td>' + closeBtn + '</td>' +
+    '</tr>';
+  }).join('');
+}
 `;

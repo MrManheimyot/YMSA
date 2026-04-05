@@ -319,4 +319,42 @@ body{font-family:'Google Sans',sans-serif;background:var(--c-surface);color:var(
 .sim-trades-header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px;border-bottom:1px solid rgba(255,255,255,.06);flex-wrap:wrap;gap:8px}
 @media(min-width:768px){.sim-trades-header{padding:12px 16px}}
 .sim-trades-desc{font-size:9px;color:var(--c-on-surface-2);margin-left:4px}
+
+/* ═══ MANUAL TRADE ACTION BUTTONS ═══ */
+.action-btn{display:inline-flex;align-items:center;gap:3px;padding:4px 10px;border-radius:20px;border:none;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap;min-height:28px;touch-action:manipulation;font-family:inherit}
+.action-btn:hover{filter:brightness(1.2);transform:scale(1.03)}
+.action-btn:active{transform:scale(.97)}
+.action-btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.action-btn-take{background:rgba(63,185,80,.2);color:#3FB950;border:1px solid rgba(63,185,80,.3)}
+.action-btn-skip{background:rgba(139,148,158,.15);color:#8B949E;border:1px solid rgba(139,148,158,.2)}
+.action-btn-tp1{background:rgba(128,203,196,.2);color:#80CBC4;border:1px solid rgba(128,203,196,.3)}
+.action-btn-tp2{background:rgba(49,141,255,.2);color:#319DFF;border:1px solid rgba(49,141,255,.3)}
+.action-btn-sl{background:rgba(248,81,73,.2);color:#F85149;border:1px solid rgba(248,81,73,.3)}
+.action-btn-sell{background:rgba(248,81,73,.2);color:#F85149;border:1px solid rgba(248,81,73,.3)}
+.action-btn-close{background:rgba(210,153,34,.2);color:#D2991F;border:1px solid rgba(210,153,34,.3)}
+.wl-action-cell{display:flex;gap:4px;flex-wrap:wrap;justify-content:center}
+
+/* ═══ QUICK TRADE MODAL ═══ */
+.ttm-info{padding:12px;background:var(--c-surface);border-radius:var(--radius-s);margin-bottom:12px;font-size:12px;line-height:1.6}
+.ttm-info .ttm-symbol{font-size:18px;font-weight:700;color:var(--c-primary)}
+.ttm-info .ttm-detail{color:var(--c-on-surface-2);font-family:'Roboto Mono',monospace}
+.ttm-form{display:flex;flex-direction:column;gap:10px}
+.ttm-field{display:flex;flex-direction:column;gap:4px}
+.ttm-field label{font-size:12px;font-weight:500;color:var(--c-on-surface-2)}
+.ttm-input{padding:10px 12px;border-radius:8px;border:1px solid var(--c-outline);background:var(--c-surface-2);color:var(--c-on-surface);font-size:14px;font-family:'Roboto Mono',monospace;min-height:44px;touch-action:manipulation;width:100%;box-sizing:border-box}
+.ttm-input:focus{outline:none;border-color:var(--c-primary);box-shadow:0 0 0 2px rgba(128,203,196,.2)}
+.ttm-actions{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+
+/* ═══ CLOSE TRADE QUICK BUTTONS ═══ */
+.ctm-quick-btns{display:flex;gap:8px;flex-wrap:wrap}
+.ctm-quick-btn{flex:1;min-width:100px;padding:12px 8px;border-radius:var(--radius-s);border:1px solid var(--c-outline);background:var(--c-surface);color:var(--c-on-surface);cursor:pointer;text-align:center;transition:all .15s;touch-action:manipulation}
+.ctm-quick-btn:hover{border-color:var(--c-primary);background:var(--c-primary-ctr)}
+.ctm-quick-btn .ctm-label{font-size:13px;font-weight:600;display:block}
+.ctm-quick-btn .ctm-price{font-size:12px;font-family:'Roboto Mono',monospace;color:var(--c-on-surface-2);margin-top:2px;display:block}
+.ctm-quick-btn.tp1{border-color:rgba(128,203,196,.3)}.ctm-quick-btn.tp1:hover{background:rgba(128,203,196,.1)}
+.ctm-quick-btn.tp2{border-color:rgba(49,141,255,.3)}.ctm-quick-btn.tp2:hover{background:rgba(49,141,255,.1)}
+.ctm-quick-btn.sl{border-color:rgba(248,81,73,.3)}.ctm-quick-btn.sl:hover{background:rgba(248,81,73,.1)}
+
+/* ═══ MANUAL TRADES SECTION ═══ */
+#manual-trades-section .empty{color:var(--c-on-surface-2);font-style:italic;text-align:center;padding:24px 16px}
 `;

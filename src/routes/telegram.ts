@@ -2,7 +2,7 @@
 
 import type { Env } from '../types';import { createLogger } from '../utils/logger';
 const logger = createLogger('Telegram');import * as yahooFinance from '../api/yahoo-finance';
-import { getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, updateTelegramAlertOutcome, getPnlDashboardData, getRecentTrades } from '../db/queries';
+import { getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, updateTelegramAlertOutcome, getPnlDashboardData, getRecentTrades, insertTrade, closeTrade, generateId } from '../db/queries';
 import { jsonResponse } from './helpers';
 
 export async function handleTelegramRoutes(
@@ -92,6 +92,105 @@ export async function handleTelegramRoutes(
     });
 
     return jsonResponse({ tgAlerts, tgStats, pnlDash, simTrades }, 200, corsHeaders);
+  }
+
+  // ─── Manual Trade: Open (User took the trade) ──
+  if (path === '/api/manual-trade-open' && request.method === 'POST') {
+    try {
+    let body: { alertId: string; qty: number; actualEntry?: number };
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ error: 'Invalid JSON body' }, 400, corsHeaders);
+    }
+    if (!body.alertId || !body.qty || body.qty <= 0) {
+      return jsonResponse({ error: 'Missing alertId or qty (must be > 0)' }, 400, corsHeaders);
+    }
+    // Fetch the alert to get trade params
+    const alert = await getTelegramAlertById(env.DB!, body.alertId);
+    if (!alert) return jsonResponse({ error: 'Alert not found' }, 404, corsHeaders);
+    if (alert.outcome !== 'PENDING') return jsonResponse({ error: 'Alert already resolved: ' + alert.outcome }, 400, corsHeaders);
+
+    const entryPrice = body.actualEntry && body.actualEntry > 0 ? body.actualEntry : alert.entry_price;
+    const tradeId = generateId('mt');
+
+    await insertTrade(env.DB!, {
+      id: tradeId,
+      engine_id: 'MANUAL',
+      symbol: alert.symbol,
+      side: alert.action,
+      qty: body.qty,
+      entry_price: entryPrice,
+      stop_loss: alert.stop_loss ?? 0,
+      take_profit: alert.take_profit_1 ?? 0,
+      status: 'OPEN',
+      opened_at: Date.now(),
+      broker_order_id: alert.id,
+      trailing_state: JSON.stringify({
+        alert_id: alert.id,
+        take_profit_2: alert.take_profit_2,
+        engine_id: alert.engine_id,
+        confidence: alert.confidence,
+      }),
+    });
+
+    logger.info('Manual trade opened', { tradeId, alertId: body.alertId, symbol: alert.symbol, qty: body.qty, entry: entryPrice });
+    return jsonResponse({ ok: true, tradeId, symbol: alert.symbol, side: alert.action, qty: body.qty, entry: entryPrice }, 200, corsHeaders);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('Manual trade open failed', { error: msg });
+      return jsonResponse({ error: 'Internal error: ' + msg }, 500, corsHeaders);
+    }
+  }
+
+  // ─── Manual Trade: Close (User exited) ─────────
+  if (path === '/api/manual-trade-close' && request.method === 'POST') {
+    try {
+    let body: { tradeId: string; exitPrice: number; exitType?: string };
+    try {
+      body = await request.json();
+    } catch {
+      return jsonResponse({ error: 'Invalid JSON body' }, 400, corsHeaders);
+    }
+    if (!body.tradeId || !body.exitPrice || body.exitPrice <= 0) {
+      return jsonResponse({ error: 'Missing tradeId or exitPrice' }, 400, corsHeaders);
+    }
+
+    // Find the trade
+    const allTrades = await getRecentTrades(env.DB!, 500);
+    const trade = allTrades.find(t => t.id === body.tradeId);
+    if (!trade) return jsonResponse({ error: 'Trade not found' }, 404, corsHeaders);
+    if (trade.status !== 'OPEN') return jsonResponse({ error: 'Trade already closed' }, 400, corsHeaders);
+
+    const isBuy = trade.side === 'BUY';
+    const pnl = isBuy
+      ? (body.exitPrice - trade.entry_price) * trade.qty
+      : (trade.entry_price - body.exitPrice) * trade.qty;
+    const pnlPct = trade.entry_price > 0
+      ? ((body.exitPrice - trade.entry_price) / trade.entry_price) * 100 * (isBuy ? 1 : -1)
+      : 0;
+
+    await closeTrade(env.DB!, body.tradeId, body.exitPrice, pnl, pnlPct);
+
+    // Also update the linked alert outcome
+    const alertId = trade.broker_order_id;
+    if (alertId) {
+      const outcome = pnl > 0 ? 'WIN' : pnl < 0 ? 'LOSS' : 'BREAKEVEN';
+      await updateTelegramAlertOutcome(
+        env.DB!, alertId,
+        outcome as 'WIN' | 'LOSS' | 'BREAKEVEN',
+        body.exitPrice, pnl, pnlPct,
+        body.exitType ? `Manual exit: ${body.exitType}` : 'Manual close'
+      );
+    }
+
+    logger.info('Manual trade closed', { tradeId: body.tradeId, exitPrice: body.exitPrice, pnl, exitType: body.exitType });
+    return jsonResponse({ ok: true, tradeId: body.tradeId, exitPrice: body.exitPrice, pnl, pnlPct, outcome: pnl > 0 ? 'WIN' : pnl < 0 ? 'LOSS' : 'BREAKEVEN' }, 200, corsHeaders);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('Manual trade close failed', { error: msg });
+      return jsonResponse({ error: 'Internal error: ' + msg }, 500, corsHeaders);
+    }
   }
 
   return null;
