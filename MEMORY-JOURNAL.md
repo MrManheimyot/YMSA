@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-05 (v3.7.1 — Full CTO Audit, R1K Classification Fix, Dashboard Alignment)
+> Last updated: 2026-04-05 (v3.8 — Information Reliability Agent, Z.AI trust-weighted validation)
 
 ---
 
@@ -11,20 +11,20 @@
 | Field | Value |
 |---|---|
 | **Name** | YMSA — Your Money, Smarter & Automated |
-| **Version** | 3.7.1 |
+| **Version** | 3.8 |
 | **Owner** | Yotam Manheim (`yotam.manheim@gmail.com`) |
 | **Runtime** | Cloudflare Workers (100% serverless, edge computing) |
 | **Language** | TypeScript (strict mode) |
 | **Framework** | Hono v4.7 (HTTP router on Workers) |
 | **Mode** | **SIGNALS ONLY** — 6-engine pipeline, no broker connected, Telegram alerts for analysis |
 | **AI Engine** | Z.AI — Multi-model routing: PRIMARY=`@cf/meta/llama-3.3-70b-instruct-fp8-fast` (70B), REASONING=`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` (32B), FAST=`@cf/meta/llama-3.1-8b-instruct-fast` (8B) |
-| **Database** | D1 (`ymsa-db`) — 15 tables (11 original + config, z_ai_health, engine_probation, engine_budgets) |
+| **Database** | D1 (`ymsa-db`) — 16 tables (11 original + config, z_ai_health, engine_probation, engine_budgets, source_reliability) |
 | **Output** | Telegram bot alerts → Yotam's phone → Manual override if needed |
 | **Local OS** | Windows 11 |
 | **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
 | **Worker URL** | `https://ymsa-financial-automation.kuki-25d.workers.dev` |
 | **Repo** | `MrManheimyot/YMSA` (branch: `master`) |
-| **Tests** | 110 tests (Vitest) across 5 files — signals, risk-controller, z-engine, data-validator, stress-test |
+| **Tests** | 146 tests (Vitest) across 6 files — signals, risk-controller, z-engine, data-validator, stress-test, reliability-agent |
 | **Platform Tier** | Cloudflare Workers **Paid Plan** — `[limits] cpu_ms = 300000` (5 min), R2 bucket `ymsa-data` active |
 
 ---
@@ -946,6 +946,7 @@ The evening summary only shows updates for:
 | 2026-04-05 | `3af6893` | **v3.7→v3.7.1: R1K Gap Close + Yahoo Bottleneck** — Dynamic TV `fetchTopByMarketCap(1050)`, TV quote cache, OHLCV range unification via `sliceOHLCVByRange()`, dashboard R1K vs External separation. R1K coverage 81.6% (816/1000). |
 | 2026-04-05 | `f90b1c3` | **R1K Classification Fix** — Exported `STATIC_R1K_SET` from `russell1000.ts`. Scanner now checks membership: verified R1K constituents → `R1K_UNIVERSE`/`R1K_RESCAN`, dynamic-only → `TV_MARKET_CAP`/`TV_RESCAN`. Reclassified 96 stale D1 rows. |
 | 2026-04-05 | `cbc2347` | **Dashboard version labels fix** — body-html.ts header "v3.7" → "v3.7.1", badge "v3.7.0" → "v3.7.1". Full CTO audit: all 18 API endpoints verified, 23 dashboard sections live, R1K/External correctly separated in production. |
+| 2026-04-05 | `7447f8f` | **v3.8: Information Reliability Agent (IRA)** — New agent (`src/agents/reliability/`) with 5 files (types, config, engine, collector, index). Google SRE "Four Golden Signals" adapted for information trust: Freshness (exponential decay), Agreement (cross-source verification), Provenance (source health + historical accuracy), Consistency (contradiction detection). 16 data sources profiled across 3 tiers. Trust scoring: 30% freshness + 35% agreement + 35% provenance. Trust tiers: VERY_HIGH(≥85,1.10x), HIGH(≥70,1.0x), MEDIUM(≥50,0.90x), LOW(≥30,0.70x), UNTRUSTED(<30,blocked). 4 contradiction types. Z.AI system prompt enhanced with trust tier reasoning. flush-cycle.ts: reliability gate before Z.AI. D1 table: `source_reliability` for learning-based accuracy. Dashboard: IRA section with trust stats + source accuracy table. API: `/api/reliability`. 36 new tests (146 total). |
 
 ---
 
@@ -969,6 +970,7 @@ The evening summary only shows updates for:
 | `config` | key (PK), value, updated_at | Runtime config overrides (risk params, tier presets A/B/C, engine budgets). Hardcoded safety ceilings in code. |
 | `z_ai_health` | id, timestamp, total_calls, successful_calls, failure_rate, approval_rate, rejection_rate | Persistent AI health stats across deploys |
 | `engine_probation` | engine_id (PK), status, original_budget, consecutive_wins, updated_at | Engine probation persistence across deploys |
+| `source_reliability` | source_id + date (PK), total_signals, correct_signals, accuracy_rate, avg_freshness_ms, avg_agreement_score, bullish_bias_pct, downtime_minutes, updated_at | IRA learning-based source accuracy (v3.8) |
 
 ### Key Queries (`src/db/queries.ts` — 29+ exported functions)
 - **Trades**: `insertTrade`, `closeTrade`, `getOpenTrades`, `getTradesByEngine`, `getRecentTrades`, `getClosedTradesSince`
