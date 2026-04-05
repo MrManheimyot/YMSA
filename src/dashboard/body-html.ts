@@ -152,42 +152,72 @@ export const DASHBOARD_BODY = `
     </div>
   </div>
 
-  <!-- ═══ v3.7: RUSSELL 1000 UNIVERSE ═══ -->
+  <!-- ═══ v3.7.1: RUSSELL 1000 UNIVERSE (R1K vs External) ═══ -->
   <div class="section">
-    <div class="section-hdr">🏛️ Russell 1000 Universe <span id="r1k-badge" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px">v3.7</span></div>
+    <div class="section-hdr">🏛️ Russell 1000 Universe <span id="r1k-badge" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px">v3.7.1</span></div>
+
+    <!-- R1K Universe Coverage -->
     <div class="card">
-      <!-- R1K Coverage Stats -->
-      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px" id="r1k-stats">
-        <div class="stat-card"><div class="label">Universe</div><div class="val" id="r1k-universe">—</div></div>
-        <div class="stat-card"><div class="label">Scanned Today</div><div class="val" id="r1k-scanned">—</div></div>
-        <div class="stat-card"><div class="label">Coverage</div><div class="val" id="r1k-coverage">—</div></div>
-        <div class="stat-card"><div class="label">Promoted</div><div class="val" id="r1k-promoted-cnt">—</div></div>
+      <div style="font-weight:600;margin-bottom:10px;font-size:14px">📊 R1K Universe Coverage</div>
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px" id="r1k-stats">
+        <div class="stat-card"><div class="label">Static List</div><div class="val" id="r1k-static">—</div></div>
+        <div class="stat-card"><div class="label">Dynamic (TV)</div><div class="val" id="r1k-dynamic">—</div></div>
+        <div class="stat-card"><div class="label">Merged Universe</div><div class="val" id="r1k-merged" style="color:var(--c-primary)">—</div></div>
+        <div class="stat-card"><div class="label">R1K Scanned</div><div class="val" id="r1k-scanned">—</div></div>
+        <div class="stat-card"><div class="label">R1K Coverage</div><div class="val" id="r1k-coverage">—</div></div>
         <div class="stat-card"><div class="label">Last Scan</div><div class="val" id="r1k-last-scan" style="font-size:11px">—</div></div>
       </div>
+      <div style="font-size:11px;color:var(--c-on-surface-2);margin-bottom:4px" id="r1k-source-label">Source: —</div>
       <!-- Sector Breakdown -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
-        <div>
-          <div style="font-weight:500;margin-bottom:8px;font-size:13px">📊 Sector Allocation</div>
-          <div id="r1k-sectors" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
+      <div style="margin-top:12px">
+        <div style="font-weight:500;margin-bottom:6px;font-size:13px">🏢 Sector Allocation</div>
+        <div id="r1k-sectors" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2);columns:2;column-gap:24px">Loading...</div>
+      </div>
+    </div>
+
+    <!-- R1K vs External: Side by Side -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px">
+      <!-- R1K Candidates -->
+      <div class="card" style="border-left:3px solid var(--c-primary)">
+        <div style="font-weight:600;margin-bottom:8px;font-size:13px;color:var(--c-primary)">🏛️ Russell 1000 Candidates</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div class="stat-card"><div class="label">R1K Scanned</div><div class="val" id="r1k-int-scanned">—</div></div>
+          <div class="stat-card"><div class="label">R1K Promoted</div><div class="val" id="r1k-int-promoted">—</div></div>
         </div>
+        <div style="font-weight:500;margin-bottom:6px;font-size:12px">Top R1K Scorers</div>
+        <div id="r1k-top-r1k" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
+      </div>
+      <!-- External Discoveries -->
+      <div class="card" style="border-left:3px solid var(--c-warn)">
+        <div style="font-weight:600;margin-bottom:8px;font-size:13px;color:var(--c-warn)">🔍 External Discoveries</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+          <div class="stat-card"><div class="label">External Scanned</div><div class="val" id="r1k-ext-scanned">—</div></div>
+          <div class="stat-card"><div class="label">External Promoted</div><div class="val" id="r1k-ext-promoted">—</div></div>
+        </div>
+        <div style="font-weight:500;margin-bottom:6px;font-size:12px">Top External Scorers</div>
+        <div id="r1k-top-ext" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Candidate Pipeline -->
+    <div class="card" style="margin-top:8px">
+      <div style="font-weight:500;margin-bottom:8px;font-size:13px">🔄 Full Pipeline Flow (R1K + External)</div>
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px" id="r1k-pipeline">
+        <div class="stat-card"><div class="label">R1K Discovered</div><div class="val" id="r1k-discovered">—</div></div>
+        <div class="stat-card"><div class="label">External Discovered</div><div class="val" id="r1k-ext-discovered">—</div></div>
+        <div class="stat-card"><div class="label">Total Promoted</div><div class="val" id="r1k-pipe-promoted">—</div></div>
+        <div class="stat-card"><div class="label">Evaluated</div><div class="val" id="r1k-evaluated">—</div></div>
+        <div class="stat-card"><div class="label">Pipeline Rate</div><div class="val" id="r1k-rate">—</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px">
         <div>
-          <div style="font-weight:500;margin-bottom:8px;font-size:13px">📡 Source Breakdown</div>
+          <div style="font-weight:500;margin-bottom:6px;font-size:12px">📡 Source Breakdown</div>
           <div id="r1k-sources" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
         </div>
         <div>
-          <div style="font-weight:500;margin-bottom:8px;font-size:13px">🏆 Top Scorers</div>
-          <div id="r1k-top" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
+          <div style="font-weight:500;margin-bottom:6px;font-size:12px">⚠️ Remaining Constraints</div>
+          <div id="r1k-constraints" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
         </div>
-      </div>
-    </div>
-    <!-- Candidate Pipeline -->
-    <div class="card" style="margin-top:8px">
-      <div style="font-weight:500;margin-bottom:8px;font-size:13px">🔄 Candidate Pipeline Flow</div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px" id="r1k-pipeline">
-        <div class="stat-card"><div class="label">Discovered</div><div class="val" id="r1k-discovered">—</div></div>
-        <div class="stat-card"><div class="label">Promoted</div><div class="val" id="r1k-pipe-promoted">—</div></div>
-        <div class="stat-card"><div class="label">Evaluated</div><div class="val" id="r1k-evaluated">—</div></div>
-        <div class="stat-card"><div class="label">Pipeline Rate</div><div class="val" id="r1k-rate">—</div></div>
       </div>
     </div>
   </div>

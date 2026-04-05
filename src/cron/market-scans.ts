@@ -6,6 +6,8 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('MarketScan');
 import * as yahooFinance from '../api/yahoo-finance';
+import { preloadQuoteCache, clearQuoteCache, prefetchOHLCV } from '../api/yahoo-finance';
+import { scanSymbolsBulk } from '../api/tradingview';
 import { computeIndicators } from '../analysis/indicators';
 import { calculateFibonacci } from '../analysis/fibonacci';
 import { detectSignals } from '../analysis/signals';
@@ -85,6 +87,36 @@ export async function runFullScan(env: Env, label: string): Promise<void> {
   beginCycle();
   await runRegimeScan(env);
 
+  // Phase 0: Pre-fetch quote + OHLCV cache for all symbols via TV bulk scan
+  // This eliminates ~800 individual Yahoo getQuote calls + ~400 duplicate OHLCV fetches
+  try {
+    const tier1 = getWatchlist(env);
+    const tier2 = getTier2Watchlist(env);
+    const promoted = await getPromotedWatchlist(env);
+    const allSymbols = [...new Set([...tier1, ...tier2, ...promoted])];
+
+    if (allSymbols.length > 0) {
+      // TV bulk scan: batches of 100 symbols → populate quote cache
+      const batches: string[][] = [];
+      for (let i = 0; i < allSymbols.length; i += 100) {
+        batches.push(allSymbols.slice(i, i + 100));
+      }
+      let totalCached = 0;
+      for (const batch of batches) {
+        const tvResults = await scanSymbolsBulk(batch);
+        totalCached += preloadQuoteCache(tvResults);
+      }
+      logger.info(`Pre-fetch: ${totalCached}/${allSymbols.length} quotes cached from TV bulk scan`);
+
+      // Pre-fetch 2y OHLCV for tier1 + top promoted (highest-priority symbols)
+      const ohlcvSymbols = [...new Set([...tier1, ...promoted.slice(0, 50)])];
+      const ohlcvCached = await prefetchOHLCV(ohlcvSymbols, 8);
+      logger.info(`Pre-fetch: ${ohlcvCached} OHLCV series cached (2y daily → slice for 3mo/6mo/1y)`);
+    }
+  } catch (err) {
+    logger.warn('Pre-fetch cache failed — engines will fall back to individual Yahoo calls', err instanceof Error ? { message: err.message } : undefined);
+  }
+
   // Phase 1: R1K re-scan top movers + superpower discovery
   await rescanR1KMovers(env).catch(e => logger.warn('R1K re-scan failed', e));
   await runSuperpowerScan(env);
@@ -138,6 +170,9 @@ export async function runFullScan(env: Env, label: string): Promise<void> {
   }
 
   logger.info(`${label}: Full scan complete`, { messagesSent: sent });
+
+  // Clean up pre-fetch cache after cycle
+  clearQuoteCache();
 
   try {
     await createSimulatedTrades(env);

@@ -33,7 +33,7 @@ export function getSystemStatus(env: Env): SystemStatus {
 
   return {
     health: 'ok',
-    version: '3.7.0',
+    version: '3.7.1',
     mode: hasAlpaca ? (paperMode ? 'PAPER TRADING' : 'LIVE TRADING') : 'SIGNALS ONLY',
     timestamp: new Date().toISOString(),
     engines: [

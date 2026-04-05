@@ -162,6 +162,63 @@ export async function scanSymbolsBulk(symbols: string[]): Promise<TVScanResult[]
 }
 
 /**
+ * Fetch the top N US stocks by market cap — dynamically discovers the Russell 1000.
+ * Uses TV scanner's sort-by-market-cap to get the actual current large/mid-cap universe.
+ * No auth required.
+ */
+export async function fetchTopByMarketCap(limit: number = 1050): Promise<TVScanResult[]> {
+  const body = {
+    columns: SCAN_COLUMNS,
+    sort: { sortBy: 'market_cap_basic', sortOrder: 'desc' },
+    range: [0, limit],
+    markets: ['america'],
+    options: { lang: 'en' },
+    filter2: {
+      operator: 'and',
+      operands: [
+        { operation: { operator: 'greater', operand: ['market_cap_basic', 3e8] } },
+        { operation: { operator: 'in_range', operand: ['close', 1, 50000] } },
+        { operation: { operator: 'greater', operand: ['volume', 50000] } },
+      ],
+    },
+  };
+
+  try {
+    const res = await fetch(`${BASE_URL}/america/scan`, {
+      method: 'POST',
+      headers: TV_HEADERS,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20000),
+    });
+
+    if (!res.ok) {
+      logger.error(`TV top-by-market-cap HTTP ${res.status}`);
+      return [];
+    }
+
+    const data = await res.json() as { data?: Array<{ s: string; d: number[] }> };
+    if (!data.data) return [];
+
+    // De-duplicate by symbol (some dual-listed on multiple exchanges)
+    const seen = new Set<string>();
+    const results: TVScanResult[] = [];
+    for (const row of data.data) {
+      const parsed = parseScanRow(row);
+      if (!seen.has(parsed.symbol) && parsed.marketCap > 0) {
+        seen.add(parsed.symbol);
+        results.push(parsed);
+      }
+    }
+
+    logger.info(`TV top-by-market-cap: ${results.length} unique symbols (requested ${limit})`);
+    return results;
+  } catch (err) {
+    logger.error('TV top-by-market-cap error', err);
+    return [];
+  }
+}
+
+/**
  * Fetch per-symbol news from TradingView's news mediator.
  * No auth required.
  */

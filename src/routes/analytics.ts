@@ -152,40 +152,65 @@ export async function handleAnalyticsRoutes(
     return jsonResponse(stats);
   }
 
-  // ─── v3.7: Russell 1000 Universe Status ────────────
+  // ─── v3.7.1: Russell 1000 Universe Status (R1K vs External separation) ──
   if (path === '/api/universe') {
-    const { RUSSELL_1000_COUNT, getSectorBreakdown, getRussell1000 } = await import('../universe/russell1000');
-    const universe = await getRussell1000(env.YMSA_CACHE);
+    const { RUSSELL_1000_COUNT, getSectorBreakdown, getRussell1000, getDynamicR1KSymbols } = await import('../universe/russell1000');
+
+    const [universe, dynamicSymbols] = await Promise.all([
+      getRussell1000(env.YMSA_CACHE),
+      getDynamicR1KSymbols(env.YMSA_CACHE),
+    ]);
     const sectors = getSectorBreakdown();
 
-    // Get today's R1K coverage from D1
+    // Get today's R1K vs External breakdown from D1
     let r1kScanned = 0;
     let r1kPromoted = 0;
+    let extScanned = 0;
+    let extPromoted = 0;
     let lastScanTime: string | null = null;
+    let r1kTopScorers: Array<{ symbol: string; score: number; source: string }> = [];
+    let extTopScorers: Array<{ symbol: string; score: number; source: string }> = [];
+
     if (env.DB) {
       const date = new Date().toISOString().split('T')[0];
-      const [scannedRes, promotedRes, lastRes] = await Promise.all([
+      const [scannedRes, promotedRes, extScannedRes, extPromotedRes, lastRes, r1kTopRes, extTopRes] = await Promise.all([
         env.DB.prepare(`SELECT COUNT(DISTINCT symbol) as cnt FROM scan_candidates WHERE scan_date = ? AND source IN ('R1K_UNIVERSE','R1K_RESCAN')`).bind(date).first(),
         env.DB.prepare(`SELECT COUNT(DISTINCT symbol) as cnt FROM scan_candidates WHERE scan_date = ? AND source IN ('R1K_UNIVERSE','R1K_RESCAN') AND promoted = 1`).bind(date).first(),
+        env.DB.prepare(`SELECT COUNT(DISTINCT symbol) as cnt FROM scan_candidates WHERE scan_date = ? AND source NOT IN ('R1K_UNIVERSE','R1K_RESCAN')`).bind(date).first(),
+        env.DB.prepare(`SELECT COUNT(DISTINCT symbol) as cnt FROM scan_candidates WHERE scan_date = ? AND source NOT IN ('R1K_UNIVERSE','R1K_RESCAN') AND promoted = 1`).bind(date).first(),
         env.DB.prepare(`SELECT MAX(discovered_at) as ts FROM scan_candidates WHERE scan_date = ? AND source IN ('R1K_UNIVERSE','R1K_RESCAN')`).bind(date).first(),
+        env.DB.prepare(`SELECT symbol, MAX(score) as score, source FROM scan_candidates WHERE scan_date = ? AND source IN ('R1K_UNIVERSE','R1K_RESCAN') GROUP BY symbol ORDER BY score DESC LIMIT 10`).bind(date).all(),
+        env.DB.prepare(`SELECT symbol, MAX(score) as score, source FROM scan_candidates WHERE scan_date = ? AND source NOT IN ('R1K_UNIVERSE','R1K_RESCAN') GROUP BY symbol ORDER BY score DESC LIMIT 10`).bind(date).all(),
       ]);
       r1kScanned = (scannedRes as any)?.cnt ?? 0;
       r1kPromoted = (promotedRes as any)?.cnt ?? 0;
+      extScanned = (extScannedRes as any)?.cnt ?? 0;
+      extPromoted = (extPromotedRes as any)?.cnt ?? 0;
       lastScanTime = (lastRes as any)?.ts ? new Date((lastRes as any).ts).toISOString() : null;
+      r1kTopScorers = ((r1kTopRes.results || []) as any[]).map(r => ({ symbol: r.symbol, score: r.score, source: r.source }));
+      extTopScorers = ((extTopRes.results || []) as any[]).map(r => ({ symbol: r.symbol, score: r.score, source: r.source }));
     }
 
     return jsonResponse({
       universe: {
         name: 'Russell 1000',
         staticCount: RUSSELL_1000_COUNT,
-        activeCount: universe.length,
+        dynamicCount: dynamicSymbols?.length ?? 0,
+        mergedCount: universe.length,
         sectors,
+        source: dynamicSymbols ? 'dynamic+static' : 'static-only',
       },
-      today: {
+      r1k: {
         scanned: r1kScanned,
         promoted: r1kPromoted,
-        coverage: universe.length > 0 ? ((r1kScanned / universe.length) * 100).toFixed(1) + '%' : '0%',
+        coverage: ((r1kScanned / Math.min(universe.length, 1000)) * 100).toFixed(1) + '%',
+        topScorers: r1kTopScorers,
         lastScan: lastScanTime,
+      },
+      external: {
+        scanned: extScanned,
+        promoted: extPromoted,
+        topScorers: extTopScorers,
       },
     });
   }

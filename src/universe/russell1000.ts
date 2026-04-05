@@ -1,17 +1,29 @@
 // ─── Russell 1000 Universe ───────────────────────────────────
-// Static constituent list — updated quarterly via KV override.
-// Source: FTSE Russell reconstitution (June annually, quarterly updates).
-// Last updated: 2026-Q2 baseline.
+// Dynamic + static hybrid approach:
+//   1. Dynamic: TV scanner top 1050 by market cap → KV cached (weekly refresh)
+//   2. Static: Curated baseline (~1000 symbols) → fallback when TV/KV unavailable
+//   3. Merged: union of both for maximum coverage
+//
+// Why not static-only: The Russell 1000 reconstitutes quarterly + IPOs/delistings.
+// Why not dynamic-only: TV may be unavailable / rate-limited. Static is zero-latency.
 //
 // Architecture:
-// 1. Static list below = baseline (always available, zero latency)
-// 2. KV key 'R1K_UNIVERSE' = override (updated via /api/universe-refresh)
-// 3. Pre-market scan batches all ~1000 symbols through TV scanner
-// 4. Scored → promoted → fed to all 6 engines
+// 1. Pre-market: fetchDynamicR1K() → store in KV → merge with static → scan all
+// 2. During market: KV-cached dynamic list (no re-fetch)
+// 3. Fallback: static list if KV + TV both unavailable
 
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Universe');
+
+// ─── Defunct / Acquired / Delisted — exclude from static list ───
+const DEFUNCT_SYMBOLS = new Set([
+  'SIVB','PACW','FRC','SGEN','HZNP','PXD','CTLT','GCP',  // Acquired/failed 2023-2025
+  'ATVI','TWTR','VMW',  // Acquired by MSFT/X/AVGO
+]);
+
+// ETFs are NOT Russell 1000 constituents
+const NON_R1K = new Set(['SPY','QQQ','IWM','BRK.A']);
 
 // ─── Russell 1000 Constituents (Top ~1000 US stocks by market cap) ───
 // Organized by sector for operational visibility.
@@ -134,15 +146,24 @@ const R1K_COMMUNICATION_SERVICES = [
 ];
 
 const R1K_MISC = [
-  // Additional large/mid-caps not sector-classified above
-  'BRK.A','SPY','QQQ','IWM',
-  // Recently IPO'd / reclassified large caps
+  // Recently IPO'd / reclassified large caps not yet in sector lists
   'ARM','BIRK','VIK','CART','IBTA','ONON','GRAB',
+  // Additional large/mid-caps commonly in R1K
+  'RIVN','LCID','JOBY','RKLB','ASTS','IONQ','RGTI','OKLO',
+  'SMMT','TMDX','NUVL','KYMR','ZETA','RDDT','CWAN','FRSH',
+  'ALKT','GFS','ACHR','PRCH','COUR','INST','BASE','GENI',
+  'TOST','BRZE','DKNG','ABNB','DASH','LI','NIO','XPEV',
+  'CELH','MNDY','CRSP','NTLA','BEAM','EDIT','INSP','TNDM',
+  'CERT','AMBA','LSCC','RMBS','CRUS','WOLF','MTSI','PI',
+  'HLNE','STEP','OWL','ARES','APO','KKR','CG','BAM',
+  'BN','TPG','BLUE','APLS','SRRK','MRUS','PCVX','XNCR',
+  'FOLD','BGNE','LEGN','WIX','GLOB','NICE','DOX','RNG',
+  'FIVN','TWLO','CAMT','ONTO','AEHR','FORM','ACLS',
 ];
 
-// ─── Combined Universe ──────────────────────────────────────
+// ─── Combined Static Universe ────────────────────────────────
 
-export const RUSSELL_1000_STATIC: string[] = [
+const _raw = [
   ...R1K_TECHNOLOGY,
   ...R1K_HEALTHCARE,
   ...R1K_FINANCIALS,
@@ -157,56 +178,128 @@ export const RUSSELL_1000_STATIC: string[] = [
   ...R1K_MISC,
 ];
 
-// Deduplicate
-const _deduped = [...new Set(RUSSELL_1000_STATIC)];
-export const RUSSELL_1000_COUNT = _deduped.length;
+// Deduplicate + remove defunct/ETFs
+const _staticSet = new Set(_raw.filter(s => !DEFUNCT_SYMBOLS.has(s) && !NON_R1K.has(s)));
+export const RUSSELL_1000_STATIC: string[] = [..._staticSet];
+export const RUSSELL_1000_COUNT = RUSSELL_1000_STATIC.length;
 
 // ─── Sector Metadata ────────────────────────────────────────
 
 export const SECTOR_MAP: Record<string, string[]> = {
-  Technology: R1K_TECHNOLOGY,
-  Healthcare: R1K_HEALTHCARE,
-  Financials: R1K_FINANCIALS,
-  'Consumer Discretionary': R1K_CONSUMER_DISCRETIONARY,
-  'Consumer Staples': R1K_CONSUMER_STAPLES,
-  Industrials: R1K_INDUSTRIALS,
-  Energy: R1K_ENERGY,
+  Technology: R1K_TECHNOLOGY.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  Healthcare: R1K_HEALTHCARE.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  Financials: R1K_FINANCIALS.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  'Consumer Discretionary': R1K_CONSUMER_DISCRETIONARY.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  'Consumer Staples': R1K_CONSUMER_STAPLES.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  Industrials: R1K_INDUSTRIALS.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  Energy: R1K_ENERGY.filter(s => !DEFUNCT_SYMBOLS.has(s)),
   Utilities: R1K_UTILITIES,
-  'Real Estate': R1K_REAL_ESTATE,
-  Materials: R1K_MATERIALS,
-  'Communication Services': R1K_COMMUNICATION_SERVICES,
+  'Real Estate': R1K_REAL_ESTATE.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  Materials: R1K_MATERIALS.filter(s => !DEFUNCT_SYMBOLS.has(s)),
+  'Communication Services': R1K_COMMUNICATION_SERVICES.filter(s => !DEFUNCT_SYMBOLS.has(s)),
 };
+
+// ─── Dynamic Universe Fetcher ───────────────────────────────
+
+const R1K_DYNAMIC_KV_KEY = 'R1K_DYNAMIC';
+const R1K_DYNAMIC_TTL_HOURS = 24; // Refresh daily
+
+/**
+ * Fetch the top ~1000 US stocks by market cap from TradingView.
+ * This IS the real-time Russell 1000 — defined as the top 1000 US stocks by market cap.
+ * Stores result in KV for reuse within TTL.
+ */
+export async function fetchDynamicR1K(kv?: KVNamespace): Promise<string[]> {
+  // Check KV cache first
+  if (kv) {
+    try {
+      const cached = await kv.get(R1K_DYNAMIC_KV_KEY, 'json') as { symbols: string[]; ts: number } | null;
+      if (cached && Date.now() - cached.ts < R1K_DYNAMIC_TTL_HOURS * 3600 * 1000) {
+        logger.info(`Using cached dynamic R1K: ${cached.symbols.length} symbols (age: ${((Date.now() - cached.ts) / 3600000).toFixed(1)}h)`);
+        return cached.symbols;
+      }
+    } catch { /* cache miss */ }
+  }
+
+  // Fetch from TV — dynamic import to avoid circular dependency
+  try {
+    const { fetchTopByMarketCap } = await import('../api/tradingview');
+    const results = await fetchTopByMarketCap(1050);
+    if (results.length < 500) {
+      logger.warn(`TV top-by-market-cap returned only ${results.length} — using static list`);
+      return [];
+    }
+
+    const symbols = results.slice(0, 1000).map(r => r.symbol);
+    logger.info(`Dynamic R1K fetched: ${symbols.length} symbols from TV market-cap ranking`);
+
+    // Cache in KV
+    if (kv) {
+      try {
+        await kv.put(R1K_DYNAMIC_KV_KEY, JSON.stringify({ symbols, ts: Date.now() }), {
+          expirationTtl: R1K_DYNAMIC_TTL_HOURS * 3600,
+        });
+      } catch { /* KV write failure — non-fatal */ }
+    }
+
+    return symbols;
+  } catch (err) {
+    logger.error('Dynamic R1K fetch failed', err);
+    return [];
+  }
+}
 
 // ─── Universe Access Functions ──────────────────────────────
 
 /**
  * Get the full Russell 1000 universe.
- * Priority: KV override → static list.
- * KV override allows quarterly updates without redeploying.
+ * Priority: Dynamic (TV top 1000 by market cap) merged with static baseline.
+ * This ensures maximum coverage: dynamic catches reconstitutions, static catches TV gaps.
  */
 export async function getRussell1000(kv?: KVNamespace): Promise<string[]> {
-  // Try KV override first (allows runtime updates)
+  // Try KV manual override first (allows admin updates)
   if (kv) {
     try {
       const override = await kv.get('R1K_UNIVERSE');
       if (override) {
         const symbols = JSON.parse(override) as string[];
         if (symbols.length > 500) {
-          logger.info(`Using KV R1K override: ${symbols.length} symbols`);
+          logger.info(`Using KV R1K manual override: ${symbols.length} symbols`);
           return symbols;
         }
       }
     } catch {
-      logger.warn('KV R1K override read failed, using static list');
+      logger.warn('KV R1K override read failed');
     }
   }
 
-  return _deduped;
+  // Merge dynamic + static for maximum coverage
+  const dynamic = await fetchDynamicR1K(kv);
+  if (dynamic.length > 0) {
+    const merged = [...new Set([...dynamic, ...RUSSELL_1000_STATIC])];
+    logger.info(`R1K merged universe: ${dynamic.length} dynamic + ${RUSSELL_1000_STATIC.length} static = ${merged.length} unique`);
+    return merged;
+  }
+
+  // Fallback to static only
+  return RUSSELL_1000_STATIC;
+}
+
+/**
+ * Get the dynamic-only R1K list (for dashboard stats).
+ * Returns null if no dynamic list is available.
+ */
+export async function getDynamicR1KSymbols(kv?: KVNamespace): Promise<string[] | null> {
+  if (!kv) return null;
+  try {
+    const cached = await kv.get(R1K_DYNAMIC_KV_KEY, 'json') as { symbols: string[]; ts: number } | null;
+    if (cached && cached.symbols.length > 500) return cached.symbols;
+  } catch { /* miss */ }
+  return null;
 }
 
 /**
  * Get universe split into batches for TV scanner.
- * Each batch is sized for a single TV API request.
  */
 export function getBatches(symbols: string[], batchSize: number = 100): string[][] {
   const batches: string[][] = [];
@@ -228,7 +321,7 @@ export function getSectorBreakdown(): Record<string, number> {
 }
 
 /**
- * Save a fresh R1K universe to KV (e.g., after quarterly reconstitution).
+ * Save a manual R1K universe override to KV.
  */
 export async function updateRussell1000(kv: KVNamespace, symbols: string[]): Promise<void> {
   await kv.put('R1K_UNIVERSE', JSON.stringify(symbols), {

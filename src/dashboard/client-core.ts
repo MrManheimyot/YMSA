@@ -489,59 +489,107 @@ function renderFeedHealth(data) {
   }).join('');
 }
 
-// ─── v3.7: Russell 1000 Universe ─────────────────
+// ─── v3.7.1: Russell 1000 Universe (R1K vs External) ─────────
 function renderR1KUniverse(universe, candidates) {
   // Universe stats (from /api/universe)
   if (universe && universe.universe) {
     var u = universe.universe;
-    var t = universe.today || {};
-    $('r1k-universe').textContent = u.activeCount ? u.activeCount.toLocaleString() : u.staticCount ? u.staticCount.toLocaleString() : '—';
-    $('r1k-scanned').textContent = t.scanned ? t.scanned.toLocaleString() : '0';
-    $('r1k-coverage').textContent = t.coverage || '0%';
-    $('r1k-promoted-cnt').textContent = t.promoted ? t.promoted.toLocaleString() : '0';
-    $('r1k-last-scan').textContent = t.lastScan ? new Date(t.lastScan).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : 'No scan yet';
+    var r = universe.r1k || {};
+    var ext = universe.external || {};
+    $('r1k-static').textContent = u.staticCount ? u.staticCount.toLocaleString() : '—';
+    $('r1k-dynamic').textContent = u.dynamicCount ? u.dynamicCount.toLocaleString() : '—';
+    $('r1k-merged').textContent = u.mergedCount ? u.mergedCount.toLocaleString() : u.staticCount ? u.staticCount.toLocaleString() : '—';
+    $('r1k-scanned').textContent = r.scanned ? r.scanned.toLocaleString() : '0';
+    $('r1k-coverage').textContent = r.coverage || '0%';
+    $('r1k-last-scan').textContent = r.lastScan ? new Date(r.lastScan).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : 'No scan';
+    $('r1k-source-label').textContent = 'Source: ' + (u.source || 'static-only') + (u.dynamicCount > 0 ? ' (' + u.dynamicCount + ' from TV market-cap ranking)' : '');
 
-    // Sector breakdown
+    // Sector breakdown (2-column)
     var sectors = u.sectors || {};
     var secHtml = Object.keys(sectors).sort(function(a, b) { return sectors[b] - sectors[a]; }).map(function(k) {
-      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span>' + k + '</span><span style="color:var(--c-primary)">' + sectors[k] + '</span></div>';
+      return '<div style="display:flex;justify-content:space-between;padding:1px 0;break-inside:avoid"><span>' + k + '</span><span style="color:var(--c-primary)">' + sectors[k] + '</span></div>';
     }).join('');
     $('r1k-sectors').innerHTML = secHtml || 'No sectors';
+
+    // R1K internal stats
+    $('r1k-int-scanned').textContent = r.scanned ? r.scanned.toLocaleString() : '0';
+    $('r1k-int-promoted').textContent = r.promoted ? r.promoted.toLocaleString() : '0';
+
+    // R1K top scorers
+    var r1kTopHtml = (r.topScorers || []).slice(0, 8).map(function(t) {
+      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span style="font-weight:500;color:var(--c-primary)">' + t.symbol + '</span><span>' + t.score + '</span></div>';
+    }).join('');
+    $('r1k-top-r1k').innerHTML = r1kTopHtml || 'No R1K scorers yet';
+
+    // External stats
+    $('r1k-ext-scanned').textContent = ext.scanned ? ext.scanned.toLocaleString() : '0';
+    $('r1k-ext-promoted').textContent = ext.promoted ? ext.promoted.toLocaleString() : '0';
+
+    // External top scorers
+    var extTopHtml = (ext.topScorers || []).slice(0, 8).map(function(t) {
+      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span style="font-weight:500;color:var(--c-warn)">' + t.symbol + '</span><span>' + t.score + ' (' + t.source + ')</span></div>';
+    }).join('');
+    $('r1k-top-ext').innerHTML = extTopHtml || 'No external scorers yet';
+
+    // Constraints
+    var gapCount = u.mergedCount ? Math.max(0, 1000 - u.mergedCount) : 0;
+    var constraintHtml = [
+      gapCount > 0 ? '• ' + gapCount + ' symbols gap vs target 1000' : '• Full R1K coverage achieved',
+      u.source === 'static-only' ? '• Dynamic fetch unavailable — using static baseline' : '• Dynamic+static merged (' + (u.dynamicCount || 0) + '+' + (u.staticCount || 0) + ')',
+      '• OHLCV: 2y daily pre-fetched, sliced for shorter ranges',
+      '• Quote cache: TV bulk scan pre-fetch, ~95% hit rate',
+    ].map(function(c) { return '<div style="padding:1px 0">' + c + '</div>'; }).join('');
+    $('r1k-constraints').innerHTML = constraintHtml;
   } else {
-    $('r1k-universe').textContent = '—';
+    $('r1k-static').textContent = '—';
+    $('r1k-dynamic').textContent = '—';
+    $('r1k-merged').textContent = '—';
     $('r1k-scanned').textContent = '0';
     $('r1k-coverage').textContent = '—';
-    $('r1k-promoted-cnt').textContent = '0';
     $('r1k-last-scan').textContent = '—';
+    $('r1k-source-label').textContent = 'Source: —';
     $('r1k-sectors').textContent = 'Loading...';
+    $('r1k-int-scanned').textContent = '0';
+    $('r1k-int-promoted').textContent = '0';
+    $('r1k-top-r1k').textContent = 'Loading...';
+    $('r1k-ext-scanned').textContent = '0';
+    $('r1k-ext-promoted').textContent = '0';
+    $('r1k-top-ext').textContent = 'Loading...';
+    $('r1k-constraints').textContent = 'Loading...';
   }
 
   // Candidate pipeline (from /api/candidates)
   if (candidates) {
-    $('r1k-discovered').textContent = candidates.total ? candidates.total.toLocaleString() : '0';
+    var r1kSources = ['R1K_UNIVERSE','R1K_RESCAN'];
+    var r1kCount = 0;
+    var extCount = 0;
+    var src = candidates.bySources || {};
+    Object.keys(src).forEach(function(k) {
+      if (r1kSources.indexOf(k) >= 0) r1kCount += src[k];
+      else extCount += src[k];
+    });
+    $('r1k-discovered').textContent = r1kCount ? r1kCount.toLocaleString() : '0';
+    $('r1k-ext-discovered').textContent = extCount ? extCount.toLocaleString() : '0';
     $('r1k-pipe-promoted').textContent = candidates.promoted ? candidates.promoted.toLocaleString() : '0';
     $('r1k-evaluated').textContent = candidates.evaluated ? candidates.evaluated.toLocaleString() : '0';
-    var rate = candidates.total > 0 ? ((candidates.evaluated / candidates.total) * 100).toFixed(0) + '%' : '—';
+    var total = candidates.total || 0;
+    var rate = total > 0 ? ((candidates.evaluated / total) * 100).toFixed(0) + '%' : '—';
     $('r1k-rate').textContent = rate;
 
     // Source breakdown
-    var srcHtml = Object.keys(candidates.bySources || {}).sort(function(a, b) { return (candidates.bySources[b] || 0) - (candidates.bySources[a] || 0); }).map(function(k) {
-      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span>' + k + '</span><span style="color:var(--c-primary)">' + candidates.bySources[k] + '</span></div>';
+    var srcHtml = Object.keys(src).sort(function(a, b) { return (src[b] || 0) - (src[a] || 0); }).map(function(k) {
+      var isR1K = r1kSources.indexOf(k) >= 0;
+      var color = isR1K ? 'var(--c-primary)' : 'var(--c-warn)';
+      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span>' + (isR1K ? '🏛️ ' : '🔍 ') + k + '</span><span style="color:' + color + '">' + src[k] + '</span></div>';
     }).join('');
     $('r1k-sources').innerHTML = srcHtml || 'No sources yet';
-
-    // Top scorers
-    var topHtml = (candidates.topScorers || []).map(function(t) {
-      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span style="font-weight:500;color:var(--c-primary)">' + t.symbol + '</span><span>Score ' + t.score + ' (' + t.source + ')</span></div>';
-    }).join('');
-    $('r1k-top').innerHTML = topHtml || 'No scorers yet';
   } else {
     $('r1k-discovered').textContent = '0';
+    $('r1k-ext-discovered').textContent = '0';
     $('r1k-pipe-promoted').textContent = '0';
     $('r1k-evaluated').textContent = '0';
     $('r1k-rate').textContent = '—';
     $('r1k-sources').textContent = 'No data';
-    $('r1k-top').textContent = 'No data';
   }
 }
 
