@@ -3,6 +3,9 @@
 
 import type { Env } from '../types';
 import * as yahooFinance from '../api/yahoo-finance';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Overnight');
 import { detectRegime, getEngineAdjustments, formatRegimeAlert } from '../analysis/regime';
 import { sendTelegramMessage } from '../alert-router';
 import { recordDailyPnl, recordEnginePerformance } from '../execution/portfolio';
@@ -48,7 +51,7 @@ export async function runOvernightSetup(env: Env): Promise<void> {
     ];
     await sendTelegramMessage(lines.join('\n'), env);
   }
-  console.log('[v3] Overnight setup complete');
+  logger.info('Overnight setup complete');
 }
 
 async function checkEngineProbation(env: Env): Promise<void> {
@@ -58,10 +61,10 @@ async function checkEngineProbation(env: Env): Promise<void> {
     if (probations.length > 0) {
       const report = formatProbationReport(probations);
       if (report) await sendTelegramMessage(report, env);
-      console.log(`[Overnight] Probation update: ${probations.length} engines evaluated`);
+      logger.info(`Probation update: ${probations.length} engines evaluated`);
     }
   } catch (e) {
-    console.error('[Overnight] Probation check error:', e);
+    logger.error('Probation check error:', e);
   }
 }
 
@@ -73,11 +76,11 @@ async function reportZAiHealth(env: Env): Promise<void> {
       if (health.alerts.length > 0 || health.totalCalls >= 5) {
         await sendTelegramMessage(healthReport, env);
       }
-      console.log(`[Overnight] Z.AI health: ${health.successfulCalls}/${health.totalCalls} calls OK, ${health.alerts.length} alerts`);
+      logger.info(`Z.AI health: ${health.successfulCalls}/${health.totalCalls} calls OK, ${health.alerts.length} alerts`);
     }
     resetZAiHealthStats();
   } catch (e) {
-    console.error('[Overnight] Z.AI health report error:', e);
+    logger.error('Z.AI health report error:', e);
   }
 }
 
@@ -85,7 +88,7 @@ async function autoResolveAlerts(env: Env): Promise<void> {
   if (!env.DB) return;
   try {
     const expired = await expireOldTelegramAlerts(env.DB, 7 * 24 * 60 * 60 * 1000);
-    if (expired > 0) console.log(`[Overnight] Auto-expired ${expired} old alerts`);
+    if (expired > 0) logger.info(`Auto-expired ${expired} old alerts`);
 
     const pending = await getPendingTelegramAlerts(env.DB);
     if (pending.length === 0) return;
@@ -99,9 +102,9 @@ async function autoResolveAlerts(env: Env): Promise<void> {
       const wasResolved = await tryResolveAlert(env.DB, alert, priceMap);
       if (wasResolved) resolved++;
     }
-    if (resolved > 0) console.log(`[Overnight] Auto-resolved ${resolved} alerts`);
+    if (resolved > 0) logger.info(`Auto-resolved ${resolved} alerts`);
   } catch (err) {
-    console.error('[Overnight] Alert resolution error:', err);
+    logger.error('Alert resolution error:', err);
   }
 }
 
@@ -164,5 +167,5 @@ export async function runMLRetrain(env: Env): Promise<void> {
   }
 
   await sendTelegramMessage('🤖 <b>ML Retrain Complete</b>\nPairs recalibrated. Engine weights updated.', env);
-  console.log('[v3] ML retrain complete');
+  logger.info('ML retrain complete');
 }

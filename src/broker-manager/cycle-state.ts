@@ -22,6 +22,7 @@ const MAX_TRADE_ALERTS_PER_HOUR = 3;
 // Cross-cycle dedup (24 hour window)
 const sentKeys = new Map<string, number>();
 const DEDUP_MS = 24 * 60 * 60 * 1000;
+const MAX_DEDUP_ENTRIES = 500;
 
 // ═══════════════════════════════════════════════════════════════
 // Accessors
@@ -99,4 +100,12 @@ export function wasSentRecently(key: string): boolean {
 
 export function markSent(key: string): void {
   sentKeys.set(key, Date.now());
+  // GAP-033: Prevent unbounded map growth — evict oldest entries when over limit
+  if (sentKeys.size > MAX_DEDUP_ENTRIES) {
+    const now = Date.now();
+    for (const [k, ts] of sentKeys) {
+      if (now - ts > DEDUP_MS || sentKeys.size > MAX_DEDUP_ENTRIES) sentKeys.delete(k);
+      if (sentKeys.size <= MAX_DEDUP_ENTRIES * 0.75) break;
+    }
+  }
 }

@@ -3,6 +3,9 @@
 
 import type { Env } from '../types';
 import * as yahooFinance from '../api/yahoo-finance';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Summaries');
 import * as coingecko from '../api/coingecko';
 import * as polymarket from '../api/polymarket';
 import * as fred from '../api/fred';
@@ -121,7 +124,7 @@ export async function runDailySummary(env: Env): Promise<void> {
 
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
   await sendTelegramMessage(lines.join('\n'), env);
-  console.log(`[v3] Daily Summary: ${openTrades.length} holdings, ${closedToday.length} closed today`);
+  logger.info(`Daily Summary: ${openTrades.length} holdings, ${closedToday.length} closed today`);
 }
 
 export async function runAfterHoursScan(env: Env): Promise<void> {
@@ -233,7 +236,7 @@ export async function runWeeklyReview(env: Env): Promise<void> {
         lines.push(narrative);
       }
     } catch (err) {
-      console.error('[Z.AI] Weekly narrative failed:', err);
+      logger.error('Z.AI weekly narrative failed:', err);
     }
   }
 
@@ -260,12 +263,12 @@ export async function runMiddayRebalance(env: Env): Promise<void> {
     if (news.length > 0) {
       if (env.DB) {
         const inserted = await storeNewsAlerts(news, env.DB);
-        console.log(`[Midday] Stored ${inserted} news alerts`);
+        logger.info(`Stored ${inserted} news alerts`);
       }
       await sendTelegramMessage(formatNewsDigest(news, 5), env);
     }
   } catch (err) {
-    console.error('[Midday] News scan error:', err);
+      logger.error('News scan error:', err);
   }
 }
 
@@ -283,12 +286,12 @@ export async function runMonthlyPerformance(env: Env): Promise<void> {
       const changes = await rebalanceEngineBudgets(env.DB);
       const report = formatBudgetRebalance(changes);
       await sendTelegramMessage(report, env);
-      console.log(`[Monthly] Budget rebalance: ${changes.length} engines adjusted`);
+      logger.info(`Budget rebalance: ${changes.length} engines adjusted`);
     } catch (e) {
-      console.error('[Monthly] Budget rebalance error:', e);
+      logger.error('Budget rebalance error:', e);
     }
   }
-  console.log('[v3] Monthly performance report sent');
+  logger.info('Monthly performance report sent');
 }
 
 // ─── Internal formatting helpers ──────────────────────────────

@@ -3,6 +3,10 @@
 // Scrapes Finviz screener results — FREE, no API needed
 // Supports 60+ screening filters from your manual workflow
 
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Finviz');
+
 interface BrowserBinding {
   launch(): Promise<any>;
 }
@@ -107,7 +111,7 @@ export async function scrapeScreener(
   filters: ScreenerFilter
 ): Promise<FinvizResult[]> {
   const url = buildScreenerUrl(filters);
-  console.log(`[Finviz] Scraping: ${url}`);
+  logger.info(`Scraping: ${url}`);
 
   let browserInstance: any;
 

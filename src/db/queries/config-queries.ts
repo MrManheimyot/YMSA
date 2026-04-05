@@ -4,6 +4,10 @@
 //
 // Table: config (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER)
 
+import { createLogger } from '../../utils/logger';
+
+const logger = createLogger('Config');
+
 // ═══════════════════════════════════════════════════════════════
 // Hardcoded Safety Ceilings (NO DB value can exceed these)
 // ═══════════════════════════════════════════════════════════════
@@ -89,9 +93,9 @@ export async function loadConfig(db: D1Database): Promise<void> {
       runtimeConfig[key] = ceiling !== undefined ? Math.min(value, ceiling) : value;
     }
 
-    console.log(`[Config] Loaded ${Object.keys(overrides).length} overrides from D1`);
+    logger.info(`Loaded ${Object.keys(overrides).length} overrides from D1`);
   } catch (err) {
-    console.error('[Config] Failed to load from D1, using defaults:', err);
+    logger.error('Failed to load from D1, using defaults:', err);
     runtimeConfig = { ...DEFAULTS };
   }
 }
@@ -179,5 +183,5 @@ export async function applyTier(db: D1Database, tier: 'A' | 'B' | 'C'): Promise<
   for (const [key, value] of Object.entries(preset.values)) {
     await setConfig(db, key, value);
   }
-  console.log(`[Config] Applied Tier ${tier} (${preset.name})`);
+  logger.info(`Applied Tier ${tier} (${preset.name})`);
 }

@@ -1,6 +1,9 @@
 // ─── Engine Budgets + Probation ───────────────────────────────
 
 import { upsertEngineBudget, loadEngineBudgets } from '../../db/queries';
+import { createLogger } from '../../utils/logger';
+
+const logger = createLogger('EngineBudgets');
 
 // ═══════════════════════════════════════════════════════════════
 // Engine-level capital budgets (% of total equity)
@@ -42,9 +45,9 @@ export async function loadPersistedBudgets(db: D1Database | undefined): Promise<
         };
       }
     }
-    console.log(`[RiskController] Loaded ${rows.length} persisted engine budgets from D1`);
+    logger.info(`Loaded ${rows.length} persisted engine budgets from D1`);
   } catch (err) {
-    console.error('[RiskController] Failed to load persisted budgets:', err);
+    logger.error('Failed to load persisted budgets:', err);
   }
 
   // GAP-019: Also load probation state from engine_probation table

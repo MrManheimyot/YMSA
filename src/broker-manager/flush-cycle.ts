@@ -14,6 +14,9 @@ import {
 import { mergeBySymbol, planTradeAlert, planMarketContext, planNoSignalsMessage } from './merge-and-plan';
 import { sendTelegramMessageEx } from './telegram';
 import { correlationCheck } from '../agents/risk-controller/risk-checker';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('FlushCycle');
 
 // Sector-level correlation matrix — hardcoded for top symbols.
 // Values represent approximate 90-day rolling correlations.
@@ -80,7 +83,7 @@ export async function flushCycle(env: Env): Promise<number> {
     if (env.DB) {
       const key = `${trade.symbol}:${trade.direction}`;
       if (!loggedTradeIds.has(key)) {
-        console.log(`[Broker] Skipping ${trade.symbol} ${trade.direction} — not tracked in D1`);
+        logger.info(`Skipping ${trade.symbol} ${trade.direction} — not tracked in D1`);
         continue;
       }
     }
@@ -88,7 +91,7 @@ export async function flushCycle(env: Env): Promise<number> {
     // GAP-015: Correlation check — block highly-correlated duplicate exposure
     const corrResult = correlationCheck(trade.symbol, approvedSymbols, CORRELATION_MATRIX);
     if (!corrResult.approved) {
-      console.log(`[Broker] ${trade.symbol} BLOCKED by correlation check: ${corrResult.violations.join(', ')}`);
+      logger.warn(`${trade.symbol} BLOCKED by correlation check: ${corrResult.violations.join(', ')}`);
       continue;
     }
 
@@ -118,7 +121,7 @@ export async function flushCycle(env: Env): Promise<number> {
     });
 
     if (!qualityReport.passedGate) {
-      console.log(`[Validator] ${trade.symbol} ${trade.direction} BLOCKED by data quality gate (score: ${qualityReport.overallScore}/100, fails: ${qualityReport.failCount})`);
+      logger.warn(`${trade.symbol} ${trade.direction} BLOCKED by data quality gate (score: ${qualityReport.overallScore}/100, fails: ${qualityReport.failCount})`);
       continue;
     }
 
@@ -153,15 +156,15 @@ export async function flushCycle(env: Env): Promise<number> {
         recordValidationResult(zValidation.verdict);
 
         if (zValidation.verdict === 'REJECT') {
-          console.log(`[Z.AI] REJECTED ${trade.symbol} ${trade.direction}: ${zValidation.reason} (conf: ${zValidation.confidence})`);
+          logger.info(`Z.AI REJECTED ${trade.symbol} ${trade.direction}: ${zValidation.reason} (conf: ${zValidation.confidence})`);
           continue;
         }
 
         aiReasoning = await synthesizeSignal((env as any).AI, tradeInfo, regime) || undefined;
         if (zValidation.verdict === 'APPROVE') {
-          console.log(`[Z.AI] APPROVED ${trade.symbol} ${trade.direction} (conf: ${zValidation.confidence}): ${zValidation.reason}`);
+          logger.info(`Z.AI APPROVED ${trade.symbol} ${trade.direction} (conf: ${zValidation.confidence}): ${zValidation.reason}`);
         }
-      } catch (err) { console.error('[Z.AI] Validation failed:', err); }
+      } catch (err) { logger.error('Z.AI validation failed:', err); }
     }
 
     const plan = planTradeAlert(trade, aiReasoning);

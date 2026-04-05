@@ -4,6 +4,9 @@
 // Docs: https://taapi.io/documentation/stocks/
 
 import type { Env, TechnicalIndicator, Timeframe } from '../types';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('TAAPI');
 
 const BASE_URL = 'https://api.taapi.io';
 
@@ -17,7 +20,7 @@ async function rateLimitedWait(): Promise<void> {
   const elapsed = now - lastRequestTime;
   if (elapsed < RATE_LIMIT_MS && lastRequestTime > 0) {
     const waitMs = RATE_LIMIT_MS - elapsed;
-    console.log(`[TAAPI] Rate limit: waiting ${(waitMs / 1000).toFixed(1)}s`);
+    logger.info(`Rate limit: waiting ${(waitMs / 1000).toFixed(1)}s`);
     await new Promise((r) => setTimeout(r, waitMs));
   }
   lastRequestTime = Date.now();
@@ -277,10 +280,10 @@ export async function getBulkIndicators(
       }
     }
 
-    console.log(`[TAAPI] Bulk ${symbol}: ${indicators.length} indicators in 1 request`);
+    logger.info(`Bulk ${symbol}: ${indicators.length} indicators in 1 request`);
     return indicators;
   } catch (err) {
-    console.error(`[TAAPI] Bulk error for ${symbol}:`, err);
+    logger.error(`Bulk error for ${symbol}:`, err);
     return [];
   }
 }

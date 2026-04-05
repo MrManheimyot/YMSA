@@ -5,6 +5,9 @@
 import type { Env } from '../types';
 import type { EngineId, RegimeType } from '../agents/types';
 import * as yahooFinance from '../api/yahoo-finance';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Regime');
 
 // ─── Types ───────────────────────────────────────────────────
 
@@ -288,7 +291,7 @@ async function fetchMultiAssetConfirmation(regime: RegimeType, _env: Env): Promi
     // +5 per confirming asset, -5 per diverging
     const adjustment = (confirming * 5) - (diverging * 5);
     if (adjustment !== 0) {
-      console.log(`[Regime] Multi-asset: ${confirming} confirm, ${diverging} diverge → adj ${adjustment > 0 ? '+' : ''}${adjustment}`);
+      logger.info(`Multi-asset: ${confirming} confirm, ${diverging} diverge → adj ${adjustment > 0 ? '+' : ''}${adjustment}`);
     }
     return adjustment;
   } catch {

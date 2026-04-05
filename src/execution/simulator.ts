@@ -6,6 +6,9 @@
 
 import type { Env } from '../types';
 import * as yahooFinance from '../api/yahoo-finance';
+import { createLogger } from '../utils/logger';
+
+const logger = createLogger('Simulator');
 import {
   getPendingTelegramAlerts,
   getOpenTrades,
@@ -106,7 +109,7 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
   }
 
   if (created > 0) {
-    console.log(`[Simulator] Created ${created} simulated trades from pending alerts`);
+    logger.info(`Created ${created} simulated trades from pending alerts`);
   }
   return created;
 }
@@ -187,7 +190,7 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
           : (entry - currentPrice) * sellQty;
         const partialPnlPct = entry > 0 ? ((currentPrice - entry) / entry) * 100 * (isBuy ? 1 : -1) : 0;
 
-        console.log(`[Simulator] Partial TP P&L%: ${partialPnlPct.toFixed(2)}%`);
+        logger.info(`Partial TP P&L%: ${partialPnlPct.toFixed(2)}%`);
 
         // Update qty in the trade
         await updateTradeQty(env.DB, trade.id, remainQty);
@@ -199,8 +202,8 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
           result.partialTp.levelIndex,
         ];
 
-        console.log(
-          `[Simulator] Partial TP on ${trade.symbol}: sold ${sellQty} shares ` +
+        logger.info(
+          `Partial TP on ${trade.symbol}: sold ${sellQty} shares ` +
           `at $${currentPrice.toFixed(2)} (P&L: $${partialPnl.toFixed(2)}), ${remainQty} remaining`
         );
       }
@@ -247,7 +250,7 @@ export async function resolveSimulatedTrades(env: Env): Promise<number> {
   }
 
   if (resolved > 0) {
-    console.log(`[Simulator] Resolved ${resolved} simulated trades`);
+    logger.info(`Resolved ${resolved} simulated trades`);
   }
   return resolved;
 }
@@ -332,7 +335,7 @@ export async function syncMissingOutcomes(env: Env): Promise<number> {
   }
 
   if (synced > 0) {
-    console.log(`[Simulator] Backfilled ${synced} telegram alert outcomes`);
+    logger.info(`Backfilled ${synced} telegram alert outcomes`);
   }
   return synced;
 }
@@ -413,7 +416,7 @@ export async function recordSimulatedDailyPnl(env: Env): Promise<void> {
     max_drawdown: maxDD,
   });
 
-  console.log(`[Simulator] Daily P&L recorded: equity=$${totalEquity.toFixed(2)}, daily=$${dailyPnl.toFixed(2)} (${dailyPnlPct.toFixed(2)}%)`);
+  logger.info(`Daily P&L recorded: equity=$${totalEquity.toFixed(2)}, daily=$${dailyPnl.toFixed(2)} (${dailyPnlPct.toFixed(2)}%)`);
 }
 
 // ─── Full Simulation Cycle ──────────────────────────────────
@@ -442,7 +445,7 @@ async function cancelDuplicateOpenTrades(env: Env): Promise<number> {
     await cancelTrade(env.DB!, id);
   }
   if (dupes.length > 0) {
-    console.log(`[Simulator] Cancelled ${dupes.length} duplicate open trades`);
+    logger.info(`Cancelled ${dupes.length} duplicate open trades`);
   }
   return dupes.length;
 }
