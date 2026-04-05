@@ -2,12 +2,12 @@
 
 export const DASHBOARD_BODY = `
 <div class="top-bar">
-  <h1>📊 YMSA v3.7 — Trading Dashboard</h1>
+  <h1>📊 YMSA v3.7.1 — Trading Dashboard</h1>
   <div class="meta">
     <span id="last-update">Loading...</span>
     <div class="live-dot"></div>
     <span id="mode-badge" class="mode-badge signals">SIGNALS</span>
-    <span style="font-family:'Roboto Mono',monospace">v3.7.0</span>
+    <span style="font-family:'Roboto Mono',monospace">v3.7.1</span>
   </div>
 </div>
 
