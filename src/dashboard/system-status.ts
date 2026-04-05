@@ -33,7 +33,7 @@ export function getSystemStatus(env: Env): SystemStatus {
 
   return {
     health: 'ok',
-    version: '3.4.0',
+    version: '3.6.0',
     mode: hasAlpaca ? (paperMode ? 'PAPER TRADING' : 'LIVE TRADING') : 'SIGNALS ONLY',
     timestamp: new Date().toISOString(),
     engines: [
@@ -46,6 +46,7 @@ export function getSystemStatus(env: Env): SystemStatus {
     ],
     crons: [
       { name: 'MORNING_BRIEFING', schedule: '0 5 * * 1-5', description: '07:00 IST — Pre-market regime + portfolio' },
+      { name: 'PREMARKET_SCAN', schedule: '0 12 * * 1-5', description: '14:00 IST — Universe discovery + candidate promotion' },
       { name: 'MARKET_OPEN', schedule: '30 14 * * 1-5', description: '16:30 IST — 6-engine full scan + execute' },
       { name: 'OPENING_RANGE', schedule: '45 14 * * 1-5', description: '16:45 IST — Opening range breakout' },
       { name: 'QUICK_SCAN', schedule: '*/15 14-21 * * 1-5', description: 'Every 15min — Pulse + smart money' },
@@ -53,6 +54,7 @@ export function getSystemStatus(env: Env): SystemStatus {
       { name: 'HOURLY_SCAN', schedule: '0 15-21 * * 1-5', description: 'Hourly — Full technical + pairs' },
       { name: 'MIDDAY_REBALANCE', schedule: '0 18 * * 1-5', description: '20:00 IST — Portfolio rebalance' },
       { name: 'EVENING_SUMMARY', schedule: '0 15 * * 1-5', description: '17:00 IST — Daily P&L snapshot' },
+      { name: 'DAILY_SUMMARY', schedule: '0 21 * * 1-5', description: '23:00 IST — Daily execution summary + holdings' },
       { name: 'OVERNIGHT_SCAN', schedule: '30 21 * * 1-5', description: '23:30 IST — After-hours + crypto' },
       { name: 'WEEKLY_REVIEW', schedule: '0 7 * * 0', description: 'Sunday 09:00 IST — Weekly review' },
       { name: 'ENGINE_RETRAIN', schedule: '0 3 * * 6', description: 'Saturday 05:00 IST — Weight calibration' },
@@ -117,7 +119,8 @@ export function getSystemStatus(env: Env): SystemStatus {
       'GET /api/social-sentiment?limit=30',
       'GET /api/tv-snapshots',
       'GET /api/feed-health',
-      'GET /api/trigger?job=morning|open|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
+      'GET /api/candidates',
+      'GET /api/trigger?job=morning|open|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly|premarket',
     ],
     riskLimits: {
       maxDailyDrawdown: 3,

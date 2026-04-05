@@ -13,7 +13,7 @@ function safeFetch(path) { return fetch(BASE + path, {credentials:'include'}).th
 
 // ─── Main Load ───────────────────────────────────
 async function loadDashboard() {
-  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats, dashData, rssFeed, socialSentiment, tvSnapshots, feedHealth] = await Promise.all([
+  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats, dashData, rssFeed, socialSentiment, tvSnapshots, feedHealth, candidates] = await Promise.all([
     safeFetch('/api/system-status'),
     safeFetch('/api/portfolio'),
     safeFetch('/api/regime'),
@@ -30,6 +30,7 @@ async function loadDashboard() {
     safeFetch('/api/social-sentiment?limit=30'),
     safeFetch('/api/tv-snapshots'),
     safeFetch('/api/feed-health'),
+    safeFetch('/api/candidates'),
   ]);
 
   if (status) renderStatus(status, engineStats);
@@ -44,6 +45,7 @@ async function loadDashboard() {
   renderSentiment(socialSentiment);
   renderTVScanner(tvSnapshots);
   renderFeedHealth(feedHealth);
+  renderCandidates(candidates);
   renderSparkline(dailyPnl);
   renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats);
   renderPnlDashboard(dashData?.pnlDash, dashData?.simTrades);
@@ -484,6 +486,32 @@ function renderFeedHealth(data) {
       '<td style="color:' + statusColor + ';font-weight:600;font-size:11px">' + statusText + '</td>' +
     '</tr>';
   }).join('');
+}
+
+// ─── v3.6: Universe Discovery ────────────────────
+function renderCandidates(data) {
+  if (!data) {
+    $('ud-total').textContent = '0';
+    $('ud-promoted').textContent = '0';
+    $('ud-evaluated').textContent = '0';
+    $('ud-rate').textContent = '—';
+    $('ud-sources').textContent = 'No data';
+    $('ud-top').textContent = 'No data';
+    return;
+  }
+  $('ud-total').textContent = data.total.toLocaleString();
+  $('ud-promoted').textContent = data.promoted.toLocaleString();
+  $('ud-evaluated').textContent = data.evaluated.toLocaleString();
+  var rate = data.total > 0 ? ((data.evaluated / data.total) * 100).toFixed(0) + '%' : '—';
+  $('ud-rate').textContent = rate;
+  var srcHtml = Object.keys(data.bySources || {}).sort(function(a, b) { return (data.bySources[b] || 0) - (data.bySources[a] || 0); }).map(function(k) {
+    return '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>' + k + '</span><span style="color:var(--c-primary)">' + data.bySources[k] + '</span></div>';
+  }).join('');
+  $('ud-sources').innerHTML = srcHtml || 'No sources yet';
+  var topHtml = (data.topScorers || []).map(function(t) {
+    return '<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="font-weight:500;color:var(--c-primary)">' + t.symbol + '</span><span>Score: ' + t.score + ' (' + t.source + ')</span></div>';
+  }).join('');
+  $('ud-top').innerHTML = topHtml || 'No scorers yet';
 }
 
 // ─── P&L Sparkline ───────────────────────────────

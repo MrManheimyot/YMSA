@@ -2,12 +2,12 @@
 
 export const DASHBOARD_BODY = `
 <div class="top-bar">
-  <h1>📊 YMSA v3.4 — Trading Dashboard</h1>
+  <h1>📊 YMSA v3.6 — Trading Dashboard</h1>
   <div class="meta">
     <span id="last-update">Loading...</span>
     <div class="live-dot"></div>
     <span id="mode-badge" class="mode-badge signals">SIGNALS</span>
-    <span style="font-family:'Roboto Mono',monospace">v3.4.0</span>
+    <span style="font-family:'Roboto Mono',monospace">v3.6.0</span>
   </div>
 </div>
 
@@ -149,6 +149,29 @@ export const DASHBOARD_BODY = `
         <thead><tr><th>Source</th><th>Total Fetches</th><th>Success</th><th>Success %</th><th>Avg Items</th><th>Consecutive Failures</th><th>Status</th></tr></thead>
         <tbody id="feed-health-body"><tr><td colspan="7" class="loading">Loading feed health...</td></tr></tbody>
       </table>
+    </div>
+  </div>
+
+  <!-- ═══ v3.6: UNIVERSE DISCOVERY ═══ -->
+  <div class="section">
+    <div class="section-hdr">🔭 Universe Discovery — Candidate Pipeline <span id="ud-version" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px">v3.6</span></div>
+    <div class="card">
+      <div class="grid-4" id="ud-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+        <div class="stat-card"><div class="label">Discovered</div><div class="val" id="ud-total">—</div></div>
+        <div class="stat-card"><div class="label">Promoted</div><div class="val" id="ud-promoted">—</div></div>
+        <div class="stat-card"><div class="label">Evaluated</div><div class="val" id="ud-evaluated">—</div></div>
+        <div class="stat-card"><div class="label">Pipeline Rate</div><div class="val" id="ud-rate">—</div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div style="font-weight:500;margin-bottom:8px;font-size:13px">📡 Sources Breakdown</div>
+          <div id="ud-sources" style="font-family:'Roboto Mono',monospace;font-size:12px;color:var(--c-on-surface-2)">Loading...</div>
+        </div>
+        <div>
+          <div style="font-weight:500;margin-bottom:8px;font-size:13px">🏆 Top Scorers Today</div>
+          <div id="ud-top" style="font-family:'Roboto Mono',monospace;font-size:12px;color:var(--c-on-surface-2)">Loading...</div>
+        </div>
+      </div>
     </div>
   </div>
 

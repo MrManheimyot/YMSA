@@ -1,7 +1,7 @@
 // ─── Analytics, Backtest & System Routes ─────────────────────
 
 import type { Env } from '../types';
-import { getRecentRiskEvents, getRecentDailyPnl, getAllLatestEnginePerformance, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentRSSItems, getLatestTVSnapshot, getRecentSentimentAll, getFeedHealthReport } from '../db/queries';
+import { getRecentRiskEvents, getRecentDailyPnl, getAllLatestEnginePerformance, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentRSSItems, getLatestTVSnapshot, getRecentSentimentAll, getFeedHealthReport, getCandidateStats } from '../db/queries';
 import { fetchGoogleAlerts, storeNewsAlerts, getFeedConfig } from '../api/google-alerts';
 import { jsonResponse } from './helpers';
 
@@ -143,6 +143,13 @@ export async function handleAnalyticsRoutes(
     if (!env.DB) return jsonResponse({ feeds: [], count: 0 });
     const feeds = await getFeedHealthReport(env.DB);
     return jsonResponse({ feeds, count: feeds.length });
+  }
+
+  // ─── v3.6: Universe Discovery / Candidate Pipeline ──
+  if (path === '/api/candidates') {
+    if (!env.DB) return jsonResponse({ total: 0, promoted: 0, evaluated: 0, bySources: {}, topScorers: [] });
+    const stats = await getCandidateStats(env.DB);
+    return jsonResponse(stats);
   }
 
   return null;
