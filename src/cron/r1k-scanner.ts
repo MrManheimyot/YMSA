@@ -12,7 +12,7 @@
 
 import type { Env } from '../types';
 import { createLogger } from '../utils/logger';
-import { getRussell1000, getBatches } from '../universe/russell1000';
+import { getRussell1000, getBatches, STATIC_R1K_SET } from '../universe/russell1000';
 import { scanSymbolsBulk, type TVScanResult } from '../api/tradingview';
 import { insertCandidatesBatch, promoteTopCandidates, getCandidateStats, cleanOldCandidates } from '../db/queries/candidate-queries';
 import { sendTelegramMessage } from '../alert-router';
@@ -87,7 +87,7 @@ export async function scanRussell1000(env: Env): Promise<R1KScanResult> {
         // Convert TV results to candidates with scoring
         const candidates = results.map(r => ({
           symbol: r.symbol,
-          source: 'R1K_UNIVERSE',
+          source: STATIC_R1K_SET.has(r.symbol) ? 'R1K_UNIVERSE' : 'TV_MARKET_CAP',
           direction: deriveR1KDirection(r),
           price: r.close,
           changePct: r.changePercent,
@@ -184,7 +184,7 @@ export async function rescanR1KMovers(env: Env): Promise<R1KScanResult> {
       if (results.length > 0) {
         const candidates = results.map(r => ({
           symbol: r.symbol,
-          source: 'R1K_RESCAN',
+          source: STATIC_R1K_SET.has(r.symbol) ? 'R1K_RESCAN' : 'TV_RESCAN',
           direction: deriveR1KDirection(r),
           price: r.close,
           changePct: r.changePercent,

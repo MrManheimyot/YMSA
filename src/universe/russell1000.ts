@@ -183,6 +183,9 @@ const _staticSet = new Set(_raw.filter(s => !DEFUNCT_SYMBOLS.has(s) && !NON_R1K.
 export const RUSSELL_1000_STATIC: string[] = [..._staticSet];
 export const RUSSELL_1000_COUNT = RUSSELL_1000_STATIC.length;
 
+/** O(1) lookup: is this symbol a verified static R1K constituent? */
+export const STATIC_R1K_SET: ReadonlySet<string> = _staticSet;
+
 // ─── Sector Metadata ────────────────────────────────────────
 
 export const SECTOR_MAP: Record<string, string[]> = {
