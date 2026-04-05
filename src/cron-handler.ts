@@ -10,6 +10,7 @@ import { sendTelegramMessage } from './alert-router';
 import { loadPersistedBudgets } from './agents/risk-controller';
 import { loadConfig } from './db/queries';
 import { loadFeedbackFromD1 } from './ai/feedback';
+import { loadSourceAccuracy } from './agents/reliability';
 import { setKVCache } from './api/yahoo-finance';
 import { persistHealthStats } from './ai/z-engine';
 import { setEngineStatsKV, loadEngineStatsFromKV, persistEngineStatsToKV } from './execution/engine';
@@ -39,6 +40,7 @@ export async function handleCronEvent(cron: string, env: Env): Promise<void> {
   if (env.DB) {
     await loadConfig(env.DB).catch(e => logger.error('loadConfig failed', e));
     await loadFeedbackFromD1(env.DB).catch(e => logger.error('loadFeedback failed', e));
+    await loadSourceAccuracy(env.DB).catch(e => logger.error('loadSourceAccuracy failed', e));
   }
 
   // Initialize OHLCV KV cache + engine stats KV

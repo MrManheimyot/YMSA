@@ -215,5 +215,12 @@ export async function handleAnalyticsRoutes(
     });
   }
 
+  // ─── Information Reliability Agent Stats ────────
+  if (path === '/api/reliability') {
+    const { getReliabilityStats } = await import('../agents/reliability');
+    const stats = getReliabilityStats();
+    return jsonResponse(stats, 200, corsHeaders);
+  }
+
   return null;
 }

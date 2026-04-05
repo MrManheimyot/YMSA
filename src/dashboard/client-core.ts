@@ -13,7 +13,7 @@ function safeFetch(path) { return fetch(BASE + path, {credentials:'include'}).th
 
 // ─── Main Load ───────────────────────────────────
 async function loadDashboard() {
-  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats, dashData, rssFeed, socialSentiment, tvSnapshots, feedHealth, candidates, universe] = await Promise.all([
+  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats, dashData, rssFeed, socialSentiment, tvSnapshots, feedHealth, candidates, universe, reliability] = await Promise.all([
     safeFetch('/api/system-status'),
     safeFetch('/api/portfolio'),
     safeFetch('/api/regime'),
@@ -32,6 +32,7 @@ async function loadDashboard() {
     safeFetch('/api/feed-health'),
     safeFetch('/api/candidates'),
     safeFetch('/api/universe'),
+    safeFetch('/api/reliability'),
   ]);
 
   if (status) renderStatus(status, engineStats);
@@ -46,6 +47,7 @@ async function loadDashboard() {
   renderSentiment(socialSentiment);
   renderTVScanner(tvSnapshots);
   renderFeedHealth(feedHealth);
+  renderReliability(reliability);
   renderR1KUniverse(universe, candidates);
   renderSparkline(dailyPnl);
   renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats);
@@ -485,6 +487,48 @@ function renderFeedHealth(data) {
       '<td>' + fmt(f.avg_items_per_fetch, 1) + '</td>' +
       '<td style="color:' + (f.consecutive_failures > 0 ? 'var(--c-sell)' : 'var(--c-on-surface-2)') + '">' + f.consecutive_failures + '</td>' +
       '<td style="color:' + statusColor + ';font-weight:600;font-size:11px">' + statusText + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+// ─── Information Reliability Agent ───────────────
+function renderReliability(data) {
+  if (!data) {
+    $('rel-source-body').innerHTML = '<tr><td colspan="6" class="empty">Reliability agent not yet active — populates after first scan</td></tr>';
+    return;
+  }
+  $('rel-trust-avg').textContent = data.avgTrustScore != null ? fmt(data.avgTrustScore, 1) : '—';
+  $('rel-assessments').textContent = data.totalAssessments || '0';
+  $('rel-contradictions').textContent = data.contradictionsDetected || '0';
+  $('rel-stale-blocked').textContent = data.staleDataBlocked || '0';
+  $('rel-high-trust').textContent = data.highTrustApprovals || '0';
+  $('rel-low-trust').textContent = data.lowTrustRejections || '0';
+  // Color the avg trust score by tier
+  var avg = data.avgTrustScore || 0;
+  $('rel-trust-avg').style.color = avg >= 85 ? 'var(--c-buy)' : avg >= 70 ? 'var(--c-primary)' : avg >= 50 ? 'var(--c-warning,#FFB74D)' : 'var(--c-sell)';
+  // Source accuracy table from sourceAccuracyMap
+  var body = $('rel-source-body');
+  var sources = data.sourceAccuracyMap || {};
+  var keys = Object.keys(sources);
+  if (!keys.length) {
+    body.innerHTML = '<tr><td colspan="6" class="empty">No source accuracy data yet — builds over time from D1</td></tr>';
+    return;
+  }
+  body.innerHTML = keys.sort().map(function(k) {
+    var s = sources[k];
+    var acc = s.accuracy != null ? (s.accuracy * 100).toFixed(0) + '%' : '—';
+    var accColor = s.accuracy >= 0.8 ? 'var(--c-buy)' : s.accuracy >= 0.5 ? 'var(--c-warning,#FFB74D)' : 'var(--c-sell)';
+    var tier = s.tier || '—';
+    var base = s.baseReliability != null ? s.baseReliability : '—';
+    var signals = s.totalSignals || 0;
+    var statusText = s.accuracy >= 0.8 ? '🟢 TRUSTED' : s.accuracy >= 0.5 ? '🟡 FAIR' : '🔴 WEAK';
+    return '<tr>' +
+      '<td class="mono" style="font-weight:500">' + k + '</td>' +
+      '<td>' + tier + '</td>' +
+      '<td>' + base + '</td>' +
+      '<td style="color:' + accColor + ';font-weight:600">' + acc + '</td>' +
+      '<td>' + signals + '</td>' +
+      '<td style="font-size:11px;font-weight:600">' + statusText + '</td>' +
     '</tr>';
   }).join('');
 }

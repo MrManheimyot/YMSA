@@ -1,4 +1,4 @@
-// ─── Flush Cycle — orchestrate merge → validate → Z.AI → send ──
+// ─── Flush Cycle — orchestrate merge → validate → reliability → Z.AI → send ──
 
 import type { Env } from '../types';
 import type { MergedTrade, MessagePlan } from './types';
@@ -14,6 +14,8 @@ import {
 import { mergeBySymbol, planTradeAlert, planMarketContext, planNoSignalsMessage } from './merge-and-plan';
 import { sendTelegramMessageEx } from './telegram';
 import { correlationCheck } from '../agents/risk-controller/risk-checker';
+import { assessReliability, formatForZAi, indicatorsToObservation, engineOutputToObservation } from '../agents/reliability';
+import type { SourceObservation } from '../agents/reliability';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('FlushCycle');
@@ -125,7 +127,34 @@ export async function flushCycle(env: Env): Promise<number> {
       continue;
     }
 
-    // Z.AI: Validate trade setup before sending
+    // ─── Information Reliability Agent: Assess source trust ───
+    const observations: SourceObservation[] = [];
+    // Collect engine outputs as directional observations
+    for (const o of outputs.filter(o => o.symbol === trade.symbol)) {
+      observations.push(engineOutputToObservation(o.symbol, o.direction as 'BUY' | 'SELL' | 'HOLD' | 'NEUTRAL', o.confidence, o.engine));
+    }
+    // Collect indicators as observation
+    const tradeIndicators = getCycleIndicators().get(trade.symbol);
+    if (tradeIndicators && tradeIndicators.length > 0) {
+      observations.push(indicatorsToObservation(trade.symbol, tradeIndicators));
+    }
+    const reliabilityVerdict = assessReliability(trade.symbol, observations);
+    const reliabilityContext = formatForZAi(reliabilityVerdict);
+
+    // Apply reliability confidence multiplier
+    const adjustedConfidence = Math.round(trade.confidence * reliabilityVerdict.confidenceMultiplier);
+    if (adjustedConfidence !== trade.confidence) {
+      logger.info(`Reliability adjusted ${trade.symbol} confidence: ${trade.confidence} → ${adjustedConfidence} (${reliabilityVerdict.trustTier}, multiplier ${reliabilityVerdict.confidenceMultiplier.toFixed(2)}x)`);
+      trade.confidence = Math.max(0, Math.min(100, adjustedConfidence));
+    }
+
+    // Block trades with UNTRUSTED reliability
+    if (reliabilityVerdict.trustTier === 'UNTRUSTED') {
+      logger.warn(`${trade.symbol} ${trade.direction} BLOCKED by Reliability Agent (trust: ${reliabilityVerdict.trustScore}/100 UNTRUSTED)`);
+      continue;
+    }
+
+    // Z.AI: Validate trade setup before sending (now with reliability context)
     let aiReasoning: string | undefined;
     if (isZAiAvailable(env)) {
       try {
@@ -150,6 +179,7 @@ export async function flushCycle(env: Env): Promise<number> {
             failCount: qualityReport.failCount,
             issues: qualityReport.issues.map(i => `${i.field}: ${i.message}`),
           },
+          reliabilityContext,
         );
 
         recordZAiCall(zValidation.verdict !== 'UNAVAILABLE', zValidation.reason?.length || 0);
@@ -162,7 +192,7 @@ export async function flushCycle(env: Env): Promise<number> {
 
         aiReasoning = await synthesizeSignal((env as any).AI, tradeInfo, regime) || undefined;
         if (zValidation.verdict === 'APPROVE') {
-          logger.info(`Z.AI APPROVED ${trade.symbol} ${trade.direction} (conf: ${zValidation.confidence}): ${zValidation.reason}`);
+          logger.info(`Z.AI APPROVED ${trade.symbol} ${trade.direction} (conf: ${zValidation.confidence}, trust: ${reliabilityVerdict.trustScore}): ${zValidation.reason}`);
         }
       } catch (err) { logger.error('Z.AI validation failed:', err); }
     }

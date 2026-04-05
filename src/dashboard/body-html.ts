@@ -152,6 +152,27 @@ export const DASHBOARD_BODY = `
     </div>
   </div>
 
+  <!-- ═══ INFORMATION RELIABILITY AGENT (IRA) ═══ -->
+  <div class="section">
+    <div class="section-hdr">🛡️ Information Reliability Agent <span id="rel-badge" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px">v3.8</span></div>
+    <div class="card">
+      <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:14px" id="rel-stats-grid">
+        <div class="stat-card"><div class="label">Avg Trust Score</div><div class="val" id="rel-trust-avg" style="color:var(--c-primary)">—</div></div>
+        <div class="stat-card"><div class="label">Assessments</div><div class="val" id="rel-assessments">—</div></div>
+        <div class="stat-card"><div class="label">Contradictions</div><div class="val" id="rel-contradictions" style="color:var(--c-warning,#FFB74D)">—</div></div>
+        <div class="stat-card"><div class="label">Stale Blocked</div><div class="val" id="rel-stale-blocked" style="color:var(--c-sell)">—</div></div>
+        <div class="stat-card"><div class="label">High Trust ✓</div><div class="val" id="rel-high-trust" style="color:var(--c-buy)">—</div></div>
+        <div class="stat-card"><div class="label">Low Trust ✗</div><div class="val" id="rel-low-trust" style="color:var(--c-sell)">—</div></div>
+      </div>
+    </div>
+    <div class="card" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="rel-source-table">
+        <thead><tr><th>Source</th><th>Tier</th><th>Base Reliability</th><th>Historical Accuracy</th><th>Signals</th><th>Status</th></tr></thead>
+        <tbody id="rel-source-body"><tr><td colspan="6" class="loading">Loading reliability data...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
   <!-- ═══ v3.7.1: RUSSELL 1000 UNIVERSE (R1K vs External) ═══ -->
   <div class="section">
     <div class="section-hdr">🏛️ Russell 1000 Universe <span id="r1k-badge" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px">v3.7.1</span></div>

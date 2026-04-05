@@ -230,10 +230,19 @@ export async function composeAlert(
 // 6. Trade Validation — Z.AI reviews data quality before execution
 // ═══════════════════════════════════════════════════════════════
 
-const VALIDATE_SYSTEM = `You are Z.AI, the risk validation officer of YMSA. You review trade setups BEFORE execution. Analyze the data quality and respond with EXACTLY this format:
+const VALIDATE_SYSTEM = `You are Z.AI, the risk validation officer of YMSA. You review trade setups BEFORE execution. Analyze the data quality and information reliability, then respond with EXACTLY this format:
 VERDICT: APPROVE or REJECT
 CONFIDENCE: 0-100
 REASON: one sentence explanation
+
+You will receive an INFORMATION RELIABILITY ASSESSMENT from the Reliability Agent. Use it to weigh source trustworthiness:
+- If Trust Score ≥85 (VERY_HIGH): sources strongly agree, rely on the data
+- If Trust Score 70-84 (HIGH): generally reliable, minor concerns acceptable
+- If Trust Score 50-69 (MEDIUM): proceed with caution, weight higher-tier sources more
+- If Trust Score 30-49 (LOW): significant doubt, require exceptional trade setup to APPROVE
+- If Trust Score <30 (UNTRUSTED): REJECT unless overwhelming technical evidence
+- If contradictions exist, trust the resolution recommended by the Reliability Agent
+- Apply the confidence multiplier to your own confidence assessment
 
 Only APPROVE if: data sources agree, indicators are consistent, risk:reward is sound, trade aligns with market regime. REJECT if any data looks stale, conflicting, or the setup has poor risk management. Be strict — false positives cost real money.`;
 
@@ -259,6 +268,7 @@ export async function validateTradeSetup(
   trade: MergedTradeInfo,
   regime: MarketRegime | null,
   dataQuality: { overallScore: number; failCount: number; issues: string[] },
+  reliabilityContext?: string,
 ): Promise<ZAiValidation> {
   if (!ai) return { verdict: 'UNAVAILABLE', confidence: 0, reason: 'Z.AI not available' };
 
@@ -270,6 +280,10 @@ export async function validateTradeSetup(
     ? `\nRECENT TRADE OUTCOMES (learn from these):\n${_feedbackExamples}\n`
     : '';
 
+  const reliabilityBlock = reliabilityContext
+    ? `\n${reliabilityContext}\n`
+    : '';
+
   const prompt = `TRADE SETUP TO VALIDATE:
 ${trade.direction} ${trade.symbol} at $${trade.entry.toFixed(2)}
 Engines: ${trade.engines.join(', ')} (${trade.engines.length} engines)
@@ -278,7 +292,7 @@ SL: $${trade.stopLoss.toFixed(2)}, TP1: $${trade.tp1.toFixed(2)}
 R:R: ${trade.stopLoss !== trade.entry ? (Math.abs(trade.tp1 - trade.entry) / Math.abs(trade.entry - trade.stopLoss)).toFixed(2) : 'N/A'}
 Conflicting engines: ${trade.conflicting ? 'YES' : 'NO'}
 ${regimeCtx}
-${feedbackBlock}
+${feedbackBlock}${reliabilityBlock}
 DATA QUALITY REPORT:
 Overall score: ${dataQuality.overallScore}/100
 Critical issues: ${dataQuality.failCount}
