@@ -168,12 +168,16 @@ export async function promoteTopCandidates(
   const symbols = ((result.results || []) as Array<{ symbol: string }>).map(r => r.symbol);
   if (symbols.length === 0) return [];
 
-  // Mark all entries for promoted symbols
-  const placeholders = symbols.map(() => '?').join(',');
-  await db.prepare(
-    `UPDATE scan_candidates SET promoted = 1
-     WHERE scan_date = ? AND symbol IN (${placeholders})`
-  ).bind(date, ...symbols).run();
+  // Mark all entries for promoted symbols — batch to stay within D1's 100-binding limit
+  const batchSize = 80; // 80 symbols + 1 date = 81 bindings (under D1's 100 limit)
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const chunk = symbols.slice(i, i + batchSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    await db.prepare(
+      `UPDATE scan_candidates SET promoted = 1
+       WHERE scan_date = ? AND symbol IN (${placeholders})`
+    ).bind(date, ...chunk).run();
+  }
 
   return symbols;
 }
@@ -250,11 +254,16 @@ export async function markCandidatesEvaluated(
 ): Promise<void> {
   if (symbols.length === 0) return;
   const date = scanDate ?? new Date().toISOString().split('T')[0];
-  const placeholders = symbols.map(() => '?').join(',');
-  await db.prepare(
-    `UPDATE scan_candidates SET evaluated = 1
-     WHERE scan_date = ? AND symbol IN (${placeholders})`
-  ).bind(date, ...symbols).run();
+  // Batch to stay within D1's 100-binding limit
+  const batchSize = 80;
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const chunk = symbols.slice(i, i + batchSize);
+    const placeholders = chunk.map(() => '?').join(',');
+    await db.prepare(
+      `UPDATE scan_candidates SET evaluated = 1
+       WHERE scan_date = ? AND symbol IN (${placeholders})`
+    ).bind(date, ...chunk).run();
+  }
 }
 
 /**

@@ -2,7 +2,7 @@
 // Cron: 12:00 UTC (14:00 IST / 08:00 ET) — 2.5 hours before market open
 //
 // Pipeline:
-// 1) TradingView bulk scanner — 6 filter passes × 50 results = ~300 unique symbols
+// 1) TradingView bulk scanner — 6 filter passes × 200 results = ~800-1000 unique symbols
 // 2) FinViz fetch-based screens — oversold + 52W highs
 // 3) Score & rank all candidates from last 24h
 // 4) Promote top 50 to full pipeline
@@ -37,8 +37,8 @@ export async function runPreMarketScan(env: Env): Promise<void> {
     discoverViaFinViz(env),
   ]);
 
-  // Phase 2: Promote top candidates
-  const promoted = await promoteTopCandidates(env.DB, 50);
+  // Phase 2: Promote top candidates (150 = enough for multi-engine coverage)
+  const promoted = await promoteTopCandidates(env.DB, 150);
 
   // Phase 3: Clean old data (7+ days)
   const cleaned = await cleanOldCandidates(env.DB, 7);
@@ -85,12 +85,12 @@ async function discoverViaTradingView(env: Env): Promise<number> {
     limit: number;
     source: string;
   }> = [
-    { type: 'top_gainers', limit: 50, source: 'TV_GAINER' },
-    { type: 'top_losers', limit: 50, source: 'TV_LOSER' },
-    { type: 'high_volume', limit: 50, source: 'TV_VOLUME' },
-    { type: 'oversold', limit: 50, source: 'TV_OVERSOLD' },
-    { type: 'overbought', limit: 50, source: 'TV_OVERBOUGHT' },
-    { type: 'all', limit: 50, source: 'TV_ALL' },
+    { type: 'top_gainers', limit: 200, source: 'TV_GAINER' },
+    { type: 'top_losers', limit: 200, source: 'TV_LOSER' },
+    { type: 'high_volume', limit: 200, source: 'TV_VOLUME' },
+    { type: 'oversold', limit: 200, source: 'TV_OVERSOLD' },
+    { type: 'overbought', limit: 200, source: 'TV_OVERBOUGHT' },
+    { type: 'all', limit: 200, source: 'TV_ALL' },
   ];
 
   let totalSymbols = 0;

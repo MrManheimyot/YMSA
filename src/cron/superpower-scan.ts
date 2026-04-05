@@ -110,11 +110,11 @@ async function runRSSIngestion(env: Env, maxTier?: 1 | 2 | 3): Promise<void> {
 async function runTVScannerCapture(env: Env): Promise<void> {
   try {
     const scans: Array<{ type: 'top_gainers' | 'top_losers' | 'high_volume' | 'oversold' | 'overbought'; limit: number; source: string }> = [
-      { type: 'top_gainers', limit: 50, source: 'TV_GAINER' },
-      { type: 'top_losers', limit: 50, source: 'TV_LOSER' },
-      { type: 'high_volume', limit: 50, source: 'TV_VOLUME' },
-      { type: 'oversold', limit: 50, source: 'TV_OVERSOLD' },
-      { type: 'overbought', limit: 50, source: 'TV_OVERBOUGHT' },
+      { type: 'top_gainers', limit: 200, source: 'TV_GAINER' },
+      { type: 'top_losers', limit: 200, source: 'TV_LOSER' },
+      { type: 'high_volume', limit: 200, source: 'TV_VOLUME' },
+      { type: 'oversold', limit: 200, source: 'TV_OVERSOLD' },
+      { type: 'overbought', limit: 200, source: 'TV_OVERBOUGHT' },
     ];
 
     for (const scan of scans) {

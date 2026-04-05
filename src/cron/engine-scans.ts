@@ -24,7 +24,7 @@ import { scrapeOversoldStocks, scrape52WeekHighs, formatFinvizAlert, fetchOverso
 import { scrapeMarketOverview, formatMarketOverview } from '../scrapers/google-finance';
 import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from '../api/google-alerts';
 import { scoreNewsSentiment, isZAiAvailable } from '../ai/z-engine';
-import { getWatchlist } from './market-scans';
+import { getWatchlist, getPromotedWatchlist } from './market-scans';
 
 export async function runRegimeScan(env: Env): Promise<void> {
   try {
@@ -43,9 +43,11 @@ export async function runRegimeScan(env: Env): Promise<void> {
 
 export async function runMTFScan(env: Env): Promise<void> {
   const tier1 = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map((s) => s.trim());
+  const promoted = await getPromotedWatchlist(env);
+  const allSymbols = [...new Set([...tier1, ...promoted])];
   const signals: ExecutableSignal[] = [];
 
-  for (const symbol of tier1) {
+  for (const symbol of allSymbols) {
     try {
       const mtf = await analyzeMultiTimeframe(symbol, env);
       if (mtf && mtf.confluence >= 65) {
@@ -72,14 +74,16 @@ export async function runMTFScan(env: Env): Promise<void> {
     const results = await executeBatch(signals, env);
     await sendExecutionAlert(formatBatchResults(results), env);
   }
-  logger.info(`MTF scan: ${signals.length} executable signals from ${tier1.length} symbols`);
+  logger.info(`MTF scan: ${signals.length} executable signals from ${allSymbols.length} symbols (${tier1.length} tier1 + ${promoted.length} promoted)`);
 }
 
 export async function runSmartMoneyScan(env: Env): Promise<void> {
   const tier1 = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map((s) => s.trim());
+  const promoted = await getPromotedWatchlist(env);
+  const allSymbols = [...new Set([...tier1, ...promoted])];
   const signals: ExecutableSignal[] = [];
 
-  for (const symbol of tier1) {
+  for (const symbol of allSymbols) {
     try {
       const ohlcv = await yahooFinance.getOHLCV(symbol, '3mo', '1d');
       if (ohlcv.length < 20) continue;
@@ -113,7 +117,7 @@ export async function runSmartMoneyScan(env: Env): Promise<void> {
     const results = await executeBatch(signals, env);
     await sendExecutionAlert(formatBatchResults(results), env);
   }
-  logger.info(`Smart Money scan: ${signals.length} executable signals`);
+  logger.info(`Smart Money scan: ${signals.length} executable signals from ${allSymbols.length} symbols (${tier1.length} tier1 + ${promoted.length} promoted)`);
 }
 
 export async function runCryptoWhaleScan(env: Env): Promise<void> {
@@ -221,10 +225,13 @@ export async function runCommodityScan(env: Env): Promise<void> {
 export async function runPairsScan(env: Env): Promise<void> {
   try {
     const watchlist = getWatchlist(env);
-    if (watchlist.length < 2) return;
+    const promoted = await getPromotedWatchlist(env);
+    // Pairs trading works better with a focused set — use top 30 promoted
+    const allSymbols = [...new Set([...watchlist, ...promoted.slice(0, 30)])];
+    if (allSymbols.length < 2) return;
 
     const priceData: Record<string, number[]> = {};
-    for (const symbol of watchlist) {
+    for (const symbol of allSymbols) {
       const ohlcv = await yahooFinance.getOHLCV(symbol, '3mo', '1d');
       if (ohlcv.length > 0) {
         priceData[symbol] = ohlcv.map((c) => c.close);
@@ -248,7 +255,7 @@ export async function runPairsScan(env: Env): Promise<void> {
         }
       }
     }
-    logger.info(`Pairs scan: ${allPairs.length} pairs analyzed, ${tradable.length} tradable`);
+    logger.info(`Pairs scan: ${allPairs.length} pairs analyzed from ${allSymbols.length} symbols, ${tradable.length} tradable`);
   } catch (err) {
     logger.error('Pairs scan error', err);
   }
@@ -256,8 +263,10 @@ export async function runPairsScan(env: Env): Promise<void> {
 
 export async function runOptionsScan(env: Env): Promise<void> {
   const watchlist = getWatchlist(env);
+  const promoted = await getPromotedWatchlist(env);
+  const allSymbols = [...new Set([...watchlist, ...promoted])];
 
-  for (const symbol of watchlist) {
+  for (const symbol of allSymbols) {
     try {
       const [quote, ohlcv] = await Promise.all([
         yahooFinance.getQuote(symbol),
@@ -289,10 +298,14 @@ export async function runOptionsScan(env: Env): Promise<void> {
       logger.error(`Options ${symbol} error`, err);
     }
   }
-  logger.info('Options scan complete');
+  logger.info(`Options scan complete: ${allSymbols.length} symbols (${watchlist.length} core + ${promoted.length} promoted)`);
 }
 
 export async function runEventDrivenScan(env: Env): Promise<void> {
+  const coreWatchlist = getWatchlist(env);
+  const promoted = await getPromotedWatchlist(env);
+  const allSymbols = [...new Set([...coreWatchlist, ...promoted])];
+
   try {
     const news = await fetchGoogleAlerts();
     if (news.length > 0) {
@@ -309,8 +322,7 @@ export async function runEventDrivenScan(env: Env): Promise<void> {
           const strong = sentiment.filter((s) => s.confidence >= 70);
 
           for (const s of strong.slice(0, 3)) {
-            const watchlist = getWatchlist(env);
-            const matchedSymbol = watchlist.find((sym) =>
+            const matchedSymbol = allSymbols.find((sym) =>
               s.headline.toUpperCase().includes(sym) || s.headline.toUpperCase().includes(sym.replace('.', '')),
             );
             if (matchedSymbol) {
@@ -338,9 +350,8 @@ export async function runEventDrivenScan(env: Env): Promise<void> {
 
   try {
     const earnings = await finnhub.getEarningsCalendar(env, 1);
-    const watchlist = getWatchlist(env);
     for (const e of earnings) {
-      if (watchlist.includes(e.symbol)) {
+      if (allSymbols.includes(e.symbol)) {
         const quote = await yahooFinance.getQuote(e.symbol);
         if (quote && Math.abs(quote.changePercent) > 3) {
           const direction: 'BUY' | 'SELL' = quote.changePercent > 0 ? 'BUY' : 'SELL';
@@ -359,9 +370,10 @@ export async function runEventDrivenScan(env: Env): Promise<void> {
   }
 
   // GAP-025: Insider transaction scan — detect cluster buying/selling
+  // Limit insider API calls to top 30 symbols to stay within Finnhub rate limits
   try {
-    const watchlist = getWatchlist(env);
-    const insiderSignals = await finnhub.scanInsiderActivity(watchlist.slice(0, 15), env);
+    const insiderSymbols = allSymbols.slice(0, 30);
+    const insiderSignals = await finnhub.scanInsiderActivity(insiderSymbols, env);
     for (const sig of insiderSignals) {
       if (sig.signal === 'NEUTRAL') continue;
       const quote = await yahooFinance.getQuote(sig.symbol);
@@ -385,7 +397,7 @@ export async function runEventDrivenScan(env: Env): Promise<void> {
     logger.error('Insider scan error', err);
   }
 
-  logger.info('Event-driven scan complete');
+  logger.info(`Event-driven scan complete: ${allSymbols.length} symbols (${coreWatchlist.length} core + ${promoted.length} promoted)`);
 }
 
 export async function runScraperScan(env: Env): Promise<void> {

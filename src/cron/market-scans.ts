@@ -26,7 +26,7 @@ import { runRegimeScan } from './engine-scans';
 import { runMTFScan, runSmartMoneyScan, runOptionsScan, runEventDrivenScan } from './engine-scans';
 import { runCryptoWhaleScan, runPolymarketScan, runCommodityScan, runPairsScan, runScraperScan } from './engine-scans';
 import { runSuperpowerScan, runSuperpowerQuick } from './superpower-scan';
-import { getPromotedCandidates, markCandidatesEvaluated } from '../db/queries/candidate-queries';
+import { getPromotedCandidates, markCandidatesEvaluated, promoteTopCandidates } from '../db/queries/candidate-queries';
 
 export function getWatchlist(env: Env): string[] {
   return env.DEFAULT_WATCHLIST.split(',').map((s) => s.trim());
@@ -83,9 +83,27 @@ export async function runQuickScan(env: Env): Promise<void> {
 export async function runFullScan(env: Env, label: string): Promise<void> {
   beginCycle();
   await runRegimeScan(env);
+
+  // Phase 1: Discovery — superpower scan stores new candidates via TV scanner
+  await runSuperpowerScan(env);
+  await runScraperScan(env);
+
+  // Phase 2: Re-promote — ensure hourly discoveries get promoted for engine scans
+  if (env.DB) {
+    try {
+      const freshPromoted = await promoteTopCandidates(env.DB, 150);
+      if (freshPromoted.length > 0) {
+        logger.info(`Hourly re-promotion: ${freshPromoted.length} candidates promoted`);
+      }
+    } catch (e) { logger.warn('Hourly re-promotion failed'); }
+  }
+
+  // Phase 3: Technical scans (Tier 1 + Tier 2 + Promoted)
   await runStockTechnicalScan(env, label);
   await runTier2TechnicalScan(env);
   await runPromotedCandidateScan(env);  // v3.5: Universe expansion
+
+  // Phase 4: Multi-engine scans — ALL now include promoted candidates
   await runMTFScan(env);
   await runSmartMoneyScan(env);
   await runPairsScan(env);
@@ -94,8 +112,6 @@ export async function runFullScan(env: Env, label: string): Promise<void> {
   await runCommodityScan(env);
   await runOptionsScan(env);
   await runEventDrivenScan(env);
-  await runScraperScan(env);
-  await runSuperpowerScan(env);
 
   const sent = await flushCycle(env);
 
@@ -302,6 +318,9 @@ async function runPromotedCandidateScan(env: Env): Promise<void> {
 export async function runOpeningRangeBreak(env: Env): Promise<void> {
   beginCycle();
   const tier1 = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST).split(',').map((s) => s.trim());
+  const promoted = await getPromotedWatchlist(env);
+  // ORB is time-critical at market open — limit to top 30 promoted by score
+  const allSymbols = [...new Set([...tier1, ...promoted.slice(0, 30)])];
   const signals: ExecutableSignal[] = [];
 
   const regime = await detectRegime(env);
@@ -311,7 +330,7 @@ export async function runOpeningRangeBreak(env: Env): Promise<void> {
     addContext(formatRegimeAlert(regime));
   }
 
-  for (const symbol of tier1) {
+  for (const symbol of allSymbols) {
     try {
       const mtf = await analyzeMultiTimeframe(symbol, env);
       if (mtf && mtf.confluence >= 70) {
