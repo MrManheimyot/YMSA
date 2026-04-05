@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-05 (v3.3.0 — Production Gap Sprint)
+> Last updated: 2026-04-05 (v3.7.1 — Full CTO Audit, R1K Classification Fix, Dashboard Alignment)
 
 ---
 
@@ -11,14 +11,14 @@
 | Field | Value |
 |---|---|
 | **Name** | YMSA — Your Money, Smarter & Automated |
-| **Version** | 3.3.0 |
+| **Version** | 3.7.1 |
 | **Owner** | Yotam Manheim (`yotam.manheim@gmail.com`) |
 | **Runtime** | Cloudflare Workers (100% serverless, edge computing) |
 | **Language** | TypeScript (strict mode) |
 | **Framework** | Hono v4.7 (HTTP router on Workers) |
-| **Mode** | **AUTONOMOUS PAPER TRADING** — 6-engine pipeline, Alpaca paper mode, with Telegram alerts |
+| **Mode** | **SIGNALS ONLY** — 6-engine pipeline, no broker connected, Telegram alerts for analysis |
 | **AI Engine** | Z.AI — Multi-model routing: PRIMARY=`@cf/meta/llama-3.3-70b-instruct-fp8-fast` (70B), REASONING=`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` (32B), FAST=`@cf/meta/llama-3.1-8b-instruct-fast` (8B) |
-| **Database** | D1 (`ymsa-db`) — 14 tables (11 original + config, z_ai_health, engine_probation) |
+| **Database** | D1 (`ymsa-db`) — 15 tables (11 original + config, z_ai_health, engine_probation, engine_budgets) |
 | **Output** | Telegram bot alerts → Yotam's phone → Manual override if needed |
 | **Local OS** | Windows 11 |
 | **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
@@ -942,6 +942,10 @@ The evening summary only shows updates for:
 | 2026-04-03 | `50e200d` | **5 Institutional Gaps Fixed (P1/P3/P4/P5/P6)** — Backtesting engine (walk-forward historical simulation with Sharpe, profit factor, win rate, drawdown, expectancy), dynamic engine budget rebalancing (monthly, performance-based, 5-40% range), stress testing suite (32 tests across 9 scenarios), engine probation system (0 wins/5+ trades → 5% budget), Z.AI health monitoring (failure rate, approval/rejection bias alerts). 110 tests (5 files). New endpoints: POST /api/backtest, GET /api/ai-health |
 | 2026-04-04 | — | **v3.2: Trailing Stops** — `src/execution/trailing.ts` (195 lines), 3-tier trailing system (INITIAL→BREAKEVEN→TRAILING), partial TP at 1.5R/2.5R, ATR ratcheting. DB migration `migrate-v3.2.sql` adds `trailing_state` column. Created PRODUCTION-GAPS memo (33 gaps identified). |
 | 2026-04-05 | — | **v3.3: Production Gap Sprint — 22/33 Gaps Fixed** — Multi-model Z.AI routing (70B/32B/8B), feedback loop (D1→few-shot→validation prompt), D1 config table with safety ceilings, express lane bypass, regime-adaptive confidence, Tier 2 active scanning, fill confirmation polling, correlation check wired, VIX position sizing, margin leverage (2x on A+ setups), multi-asset regime (QQQ/IWM/TLT/GLD), KV OHLCV caching (in-memory 5min + KV 15min TTL), enhanced structured logging (createLogger/withErrorBoundary/getRecentErrors), R2 bucket enabled, CPU limits configured (5min), symbol truncation removed. **0 TSC errors, 110/110 tests passing.** |
+| 2026-04-05 | `282bc0d` | **v3.5→v3.6: Yahoo Finance Integration + TradingView Scanner** — Yahoo Finance OHLCV (2-year daily), TV `fetchTopByMarketCap()`, bulk quote pre-fetch, `preloadQuoteCache()`, R1K 803 symbols. 6 RSS feeds active. Dashboard rebuilt with 23 sections. |
+| 2026-04-05 | `3af6893` | **v3.7→v3.7.1: R1K Gap Close + Yahoo Bottleneck** — Dynamic TV `fetchTopByMarketCap(1050)`, TV quote cache, OHLCV range unification via `sliceOHLCVByRange()`, dashboard R1K vs External separation. R1K coverage 81.6% (816/1000). |
+| 2026-04-05 | `f90b1c3` | **R1K Classification Fix** — Exported `STATIC_R1K_SET` from `russell1000.ts`. Scanner now checks membership: verified R1K constituents → `R1K_UNIVERSE`/`R1K_RESCAN`, dynamic-only → `TV_MARKET_CAP`/`TV_RESCAN`. Reclassified 96 stale D1 rows. |
+| 2026-04-05 | `cbc2347` | **Dashboard version labels fix** — body-html.ts header "v3.7" → "v3.7.1", badge "v3.7.0" → "v3.7.1". Full CTO audit: all 18 API endpoints verified, 23 dashboard sections live, R1K/External correctly separated in production. |
 
 ---
 
