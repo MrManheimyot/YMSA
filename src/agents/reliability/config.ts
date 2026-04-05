@@ -38,15 +38,6 @@ export const SOURCE_PROFILES: Record<DataSourceId, SourceProfile> = {
     refreshIntervalMs: 60_000,
     hasCrossValidation: true,
   },
-  ALPHA_VANTAGE: {
-    id: 'ALPHA_VANTAGE',
-    tier: 2,
-    dataType: 'PRICE',
-    baseReliability: 78,
-    latencyMs: 120_000,
-    refreshIntervalMs: 300_000,      // 5 min for free tier
-    hasCrossValidation: true,
-  },
   COINGECKO: {
     id: 'COINGECKO',
     tier: 2,

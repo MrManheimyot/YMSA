@@ -1,7 +1,7 @@
 // ─── Telegram Alert & P&L Dashboard Routes ──────────────────
 
-import type { Env } from '../types';
-import * as yahooFinance from '../api/yahoo-finance';
+import type { Env } from '../types';import { createLogger } from '../utils/logger';
+const logger = createLogger('Telegram');import * as yahooFinance from '../api/yahoo-finance';
 import { getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, updateTelegramAlertOutcome, getPnlDashboardData, getRecentTrades } from '../db/queries';
 import { jsonResponse } from './helpers';
 
@@ -76,7 +76,10 @@ export async function handleTelegramRoutes(
       try {
         const quotes = await yahooFinance.getMultipleQuotes(openSymbols);
         priceMap = new Map(quotes.map(q => [q.symbol, q.price]));
-      } catch {}
+      } catch (err) {
+        // Price enrichment is best-effort for dashboard display
+        logger.warn('Live quote enrichment failed for open trades:', { error: err });
+      }
     }
     const simTrades = activeTrades.map(t => {
       if (t.status !== 'OPEN') return t;

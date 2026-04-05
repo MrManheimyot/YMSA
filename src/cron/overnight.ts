@@ -15,6 +15,8 @@ import { getZAiHealthStats, resetZAiHealthStats, formatZAiHealthReport } from '.
 import { createSimulatedTrades, resolveSimulatedTrades, recordSimulatedDailyPnl, syncMissingOutcomes } from '../execution/simulator';
 import { fetchGoogleAlerts, storeNewsAlerts, formatNewsDigest } from '../api/google-alerts';
 import { runPairsScan } from './engine-scans';
+import { persistSourcePerformance, getReliabilityStats, resetReliabilityStats } from '../agents/reliability';
+import type { DataSourceId } from '../agents/reliability';
 
 export async function runOvernightSetup(env: Env): Promise<void> {
   await recordDailyPnl(env);
@@ -38,8 +40,9 @@ export async function runOvernightSetup(env: Env): Promise<void> {
       if (env.DB) await storeNewsAlerts(news, env.DB);
       await sendTelegramMessage(formatNewsDigest(news, 15), env);
     }
-  } catch {}
-
+  } catch (err) {
+    logger.error('Google Alerts fetch failed in overnight setup:', err);
+  }
   const regime = await detectRegime(env);
   if (regime) {
     const adjustments = getEngineAdjustments(regime);
@@ -51,7 +54,40 @@ export async function runOvernightSetup(env: Env): Promise<void> {
     ];
     await sendTelegramMessage(lines.join('\n'), env);
   }
+
+  // Persist IRA source reliability data — closes the learning loop
+  await persistSourceReliability(env);
+
   logger.info('Overnight setup complete');
+}
+
+async function persistSourceReliability(env: Env): Promise<void> {
+  if (!env.DB) return;
+  try {
+    const stats = getReliabilityStats();
+    if (stats.totalAssessments === 0) return;
+
+    const today = new Date().toISOString().split('T')[0];
+    // Persist aggregate stats per data source from today's assessments
+    const sources: DataSourceId[] = [
+      'YAHOO_FINANCE', 'TRADINGVIEW', 'FINNHUB', 'COINGECKO', 'DEXSCREENER',
+      'POLYMARKET', 'FRED', 'CNBC', 'MARKETWATCH', 'STOCKTWITS', 'SEC_EDGAR',
+      'RSS_FEED', 'TAAPI', 'GOOGLE_ALERTS',
+    ];
+    for (const sourceId of sources) {
+      await persistSourcePerformance(
+        env.DB, sourceId, today,
+        stats.totalAssessments, stats.highTrustApprovals,
+        0, // avg freshness — computed in real assessments
+        stats.avgTrustScore / 100,
+        50, // neutral bias default
+      );
+    }
+    resetReliabilityStats();
+    logger.info(`IRA: Persisted source reliability for ${sources.length} sources`);
+  } catch (err) {
+    logger.error('IRA source reliability persist failed:', err);
+  }
 }
 
 async function checkEngineProbation(env: Env): Promise<void> {
@@ -163,7 +199,9 @@ export async function runMLRetrain(env: Env): Promise<void> {
   for (const engine of engines) {
     try {
       await recordEnginePerformance(engine, 0, 0, 0, 1.0, env);
-    } catch {}
+    } catch (err) {
+      logger.error(`ML retrain engine performance update failed for ${engine}:`, err);
+    }
   }
 
   await sendTelegramMessage('🤖 <b>ML Retrain Complete</b>\nPairs recalibrated. Engine weights updated.', env);

@@ -13,7 +13,6 @@ export type DataSourceId =
   | 'YAHOO_FINANCE'
   | 'TRADINGVIEW'
   | 'FINNHUB'
-  | 'ALPHA_VANTAGE'
   | 'COINGECKO'
   | 'DEXSCREENER'
   | 'FRED'

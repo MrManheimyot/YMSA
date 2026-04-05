@@ -7,7 +7,7 @@ import { synthesizeSignal, validateTradeSetup, isZAiAvailable, recordZAiCall, re
 import { insertTelegramAlert, updateTelegramAlertGateStatus, generateId } from '../db/queries';
 import { validateTradeParams, validateSignalConsistency, buildDataQualityReport } from '../utils/data-validator';
 import {
-  getCycleOutputs, getCycleRegime, getCycleIndicators,
+  getCycleOutputs, getCycleRegime, getCycleIndicators, getCycleVolumeRatios, getCycleSignalScores,
   isCyclePending, wasSentRecently, markSent,
   canSendTradeAlert, recordTradeAlert, resetCycle,
 } from './cycle-state';
@@ -52,20 +52,83 @@ async function logRejectedAlert(
   }
 }
 
-// Sector-level correlation matrix — hardcoded for top symbols.
-// Values represent approximate 90-day rolling correlations.
-const CORRELATION_MATRIX: Record<string, Record<string, number>> = {
-  AAPL: { MSFT: 0.82, GOOGL: 0.78, META: 0.75, AMZN: 0.72, NVDA: 0.70, AMD: 0.65, AVGO: 0.65 },
-  MSFT: { GOOGL: 0.80, META: 0.72, AMZN: 0.75, NVDA: 0.68, CRM: 0.70 },
-  NVDA: { AMD: 0.90, AVGO: 0.85, INTC: 0.70, QCOM: 0.72 },
-  AMD: { AVGO: 0.80, INTC: 0.75, QCOM: 0.72 },
-  JPM: { GS: 0.88, V: 0.65 },
-  XOM: { CVX: 0.92, COP: 0.88 },
-  CVX: { COP: 0.90 },
-  UNH: { JNJ: 0.60, PFE: 0.55 },
-  NKE: { SBUX: 0.50, MCD: 0.55 },
-  SPY: { QQQ: 0.92 },
-};
+// ─── Dynamic Correlation Matrix — computed from real OHLCV data ───
+import { getOHLCV } from '../api/yahoo-finance';
+
+/** KV-cached correlation matrix, refreshed once per cron cycle */
+let _correlationCache: Record<string, Record<string, number>> | null = null;
+let _correlationCacheTs = 0;
+const CORR_CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours
+
+/** Compute Pearson correlation from two arrays of daily returns */
+function pearsonCorrelation(a: number[], b: number[]): number {
+  const n = Math.min(a.length, b.length);
+  if (n < 20) return 0; // insufficient data
+  const meanA = a.slice(0, n).reduce((s, v) => s + v, 0) / n;
+  const meanB = b.slice(0, n).reduce((s, v) => s + v, 0) / n;
+  let num = 0, denA = 0, denB = 0;
+  for (let i = 0; i < n; i++) {
+    const dA = a[i] - meanA;
+    const dB = b[i] - meanB;
+    num += dA * dB;
+    denA += dA * dA;
+    denB += dB * dB;
+  }
+  const den = Math.sqrt(denA * denB);
+  return den === 0 ? 0 : num / den;
+}
+
+/** Convert OHLCV prices to daily returns */
+function toReturns(closes: number[]): number[] {
+  const ret: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    if (closes[i - 1] > 0) ret.push((closes[i] - closes[i - 1]) / closes[i - 1]);
+  }
+  return ret;
+}
+
+/** Build correlation matrix dynamically from 90-day OHLCV data */
+async function buildCorrelationMatrix(symbols: string[]): Promise<Record<string, Record<string, number>>> {
+  const matrix: Record<string, Record<string, number>> = {};
+  // Fetch 90-day closes for each symbol
+  const returnsMap = new Map<string, number[]>();
+  await Promise.all(symbols.map(async (sym) => {
+    try {
+      const ohlcv = await getOHLCV(sym, '6mo', '1d');
+      const closes = ohlcv.slice(-90).map(c => c.close);
+      if (closes.length >= 20) returnsMap.set(sym, toReturns(closes));
+    } catch { /* skip symbol if data unavailable */ }
+  }));
+  // Compute pairwise correlations
+  const syms = [...returnsMap.keys()];
+  for (let i = 0; i < syms.length; i++) {
+    const a = syms[i];
+    matrix[a] = matrix[a] || {};
+    for (let j = i + 1; j < syms.length; j++) {
+      const b = syms[j];
+      const corr = pearsonCorrelation(returnsMap.get(a)!, returnsMap.get(b)!);
+      matrix[a][b] = parseFloat(corr.toFixed(3));
+      matrix[b] = matrix[b] || {};
+      matrix[b][a] = parseFloat(corr.toFixed(3));
+    }
+  }
+  return matrix;
+}
+
+/** Get or refresh the correlation matrix (cached per cycle) */
+async function getCorrelationMatrix(approvedSymbols: string[], newSymbol: string): Promise<Record<string, Record<string, number>>> {
+  if (_correlationCache && Date.now() - _correlationCacheTs < CORR_CACHE_TTL) return _correlationCache;
+  const symbols = [...new Set([...approvedSymbols, newSymbol])];
+  if (symbols.length < 2) return {};
+  try {
+    _correlationCache = await buildCorrelationMatrix(symbols);
+    _correlationCacheTs = Date.now();
+    return _correlationCache;
+  } catch (err) {
+    logger.warn('Correlation matrix build failed, using empty matrix', { error: err });
+    return {};
+  }
+}
 
 export async function flushCycle(env: Env): Promise<number> {
   if (!isCyclePending()) return 0;
@@ -82,6 +145,8 @@ export async function flushCycle(env: Env): Promise<number> {
 
   // Individual trade alerts — one per stock (gates → D1 insert → Telegram)
   const approvedSymbols: string[] = [];
+  const volumeRatios = getCycleVolumeRatios();
+  const signalScores = getCycleSignalScores();
   for (const trade of trades) {
     // Pre-filter: minimum confidence and dedup
     if (trade.confidence < 55) continue;
@@ -89,8 +154,25 @@ export async function flushCycle(env: Env): Promise<number> {
     const key = `${trade.symbol}:${trade.direction}`;
     if (wasSentRecently(key)) continue;
 
-    // GAP-015: Correlation check — block highly-correlated duplicate exposure
-    const corrResult = correlationCheck(trade.symbol, approvedSymbols, CORRELATION_MATRIX);
+    // Volume hard gate: require ≥ 2.0x avg volume for trade alerts
+    const volRatio = volumeRatios.get(trade.symbol) ?? 0;
+    if (volRatio < 2.0) {
+      logger.warn(`${trade.symbol} BLOCKED by volume gate — ratio ${volRatio.toFixed(1)}x (need ≥2.0x)`);
+      await logRejectedAlert(env, trade, regime, `Volume gate: ${volRatio.toFixed(1)}x < 2.0x required`);
+      continue;
+    }
+
+    // Signal score gate: require score ≥ 65 for trade alerts
+    const sigScore = signalScores.get(trade.symbol) ?? 0;
+    if (sigScore < 65) {
+      logger.warn(`${trade.symbol} BLOCKED by signal score gate — score ${sigScore} (need ≥65)`);
+      await logRejectedAlert(env, trade, regime, `Signal score gate: ${sigScore} < 65 required`);
+      continue;
+    }
+
+    // GAP-015: Correlation check — block highly-correlated duplicate exposure (dynamic)
+    const corrMatrix = await getCorrelationMatrix(approvedSymbols, trade.symbol);
+    const corrResult = correlationCheck(trade.symbol, approvedSymbols, corrMatrix);
     if (!corrResult.approved) {
       logger.warn(`${trade.symbol} BLOCKED by correlation check: ${corrResult.violations.join(', ')}`);
       await logRejectedAlert(env, trade, regime, `Correlation: ${corrResult.violations.join(', ')}`);
@@ -274,7 +356,9 @@ export async function flushCycle(env: Env): Promise<number> {
         if (tgaId && env.DB) {
           try {
             await env.DB.prepare(`UPDATE telegram_alerts SET alert_text = ? WHERE id = ?`).bind(msg.text, tgaId).run();
-          } catch {}
+          } catch (err) {
+            logger.error(`Failed to update alert_text for ${t.symbol} (id: ${tgaId}):`, err);
+          }
         }
       }
     } catch (err) {

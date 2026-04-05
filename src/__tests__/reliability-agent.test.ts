@@ -55,8 +55,8 @@ describe('Reliability Agent — Configuration', () => {
     expect(TRUST_THRESHOLDS.MEDIUM).toBeGreaterThan(TRUST_THRESHOLDS.LOW);
   });
 
-  it('covers all 16 data sources', () => {
-    expect(Object.keys(SOURCE_PROFILES).length).toBe(16);
+  it('covers all 15 data sources', () => {
+    expect(Object.keys(SOURCE_PROFILES).length).toBe(15);
   });
 });
 

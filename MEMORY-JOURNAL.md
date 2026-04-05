@@ -2,7 +2,7 @@
 
 > **Purpose**: This is the single source of truth for any LLM, AI assistant, or developer working on this project.
 > Read this file FIRST before making ANY changes, running ANY commands, or deploying ANYTHING.
-> Last updated: 2026-04-05 (v3.8 — Information Reliability Agent, Z.AI trust-weighted validation)
+> Last updated: 2026-04-06 (v3.9.1 — Gap closure sprint: volume gate, signal score gate, ATR/momentum/candle filters, express lane tightened, VIX halt, ALPHA_VANTAGE removed)
 
 ---
 
@@ -11,14 +11,14 @@
 | Field | Value |
 |---|---|
 | **Name** | YMSA — Your Money, Smarter & Automated |
-| **Version** | 3.8 |
+| **Version** | 3.9.1 |
 | **Owner** | Yotam Manheim (`yotam.manheim@gmail.com`) |
 | **Runtime** | Cloudflare Workers (100% serverless, edge computing) |
 | **Language** | TypeScript (strict mode) |
 | **Framework** | Hono v4.7 (HTTP router on Workers) |
 | **Mode** | **SIGNALS ONLY** — 6-engine pipeline, no broker connected, Telegram alerts for analysis |
 | **AI Engine** | Z.AI — Multi-model routing: PRIMARY=`@cf/meta/llama-3.3-70b-instruct-fp8-fast` (70B), REASONING=`@cf/deepseek-ai/deepseek-r1-distill-qwen-32b` (32B), FAST=`@cf/meta/llama-3.1-8b-instruct-fast` (8B) |
-| **Database** | D1 (`ymsa-db`) — 16 tables (11 original + config, z_ai_health, engine_probation, engine_budgets, source_reliability) |
+| **Database** | D1 (`ymsa-db`) — 21 tables (11 original + config, z_ai_health, engine_probation, engine_budgets, source_reliability + v3.4–v3.5 tables) |
 | **Output** | Telegram bot alerts → Yotam's phone → Manual override if needed |
 | **Local OS** | Windows 11 |
 | **Local Path** | `c:\Users\yotam\Downloads\YMSA\YMSA` |
@@ -271,7 +271,7 @@ US Market Hours: 14:30–21:00 UTC (9:30 AM – 4:00 PM ET).
 | Service | Key Name | Free? | Rate Limit | Used For |
 |---|---|---|---|---|
 | Yahoo Finance | *(no key needed)* | ✅ FREE | ~2000 req/hr | Quotes, OHLCV, commodities, indices, 52W analysis |
-| Alpha Vantage | `ALPHA_VANTAGE_API_KEY` | Free tier (5/min) | 5 req/min, 500/day | EMA, RSI, MACD (backup to local compute) |
+| Alpha Vantage | ~~`ALPHA_VANTAGE_API_KEY`~~ | **REMOVED** (v3.9.1) | — | Module deleted, IRA profile removed |
 | TAAPI.io | `TAAPI_API_KEY` | Paid ($10+/mo) | Varies by plan | 200+ indicators, MTF bulk queries (cached 5min via KV) |
 | Finnhub | `FINNHUB_API_KEY` | Free tier | 60 req/min | News, earnings calendar, company events |
 | FRED | `FRED_API_KEY` | ✅ FREE | 120 req/min | Macro: GDP, CPI, yield curve, VIX, commodity prices |

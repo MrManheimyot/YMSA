@@ -168,7 +168,7 @@ export function vixRiskAdjustment(vixLevel: number): {
   stopMultiplier: number;
   maxExposurePct: number;
 } {
-  if (vixLevel >= 35) return { positionSizeMultiplier: 0.25, stopMultiplier: 0.5, maxExposurePct: 30 };
+  if (vixLevel >= 35) return { positionSizeMultiplier: 0.0, stopMultiplier: 0.5, maxExposurePct: 0 };
   if (vixLevel >= 25) return { positionSizeMultiplier: 0.50, stopMultiplier: 0.75, maxExposurePct: 50 };
   if (vixLevel >= 18) return { positionSizeMultiplier: 0.75, stopMultiplier: 0.9, maxExposurePct: 70 };
   return { positionSizeMultiplier: 1.0, stopMultiplier: 1.0, maxExposurePct: 80 };

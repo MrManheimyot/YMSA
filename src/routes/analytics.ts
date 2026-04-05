@@ -1,6 +1,8 @@
 // ─── Analytics, Backtest & System Routes ─────────────────────
 
 import type { Env } from '../types';
+import { createLogger } from '../utils/logger';
+const logger = createLogger('Analytics');
 import { getRecentRiskEvents, getRecentDailyPnl, getAllLatestEnginePerformance, getRecentNewsAlerts, getNewsAlertsByCategory, getRecentRSSItems, getLatestTVSnapshot, getRecentSentimentAll, getFeedHealthReport, getCandidateStats } from '../db/queries';
 import { fetchGoogleAlerts, storeNewsAlerts, getFeedConfig } from '../api/google-alerts';
 import { jsonResponse } from './helpers';
@@ -77,8 +79,9 @@ export async function handleAnalyticsRoutes(
           eng.trades_executed = ts.total;
         }
       }
-    } catch {}
-    return jsonResponse({ engines: latest, count: latest.length });
+    } catch (err) {
+      logger.error('Engine stats live signal count query failed:', err);
+    }
   }
 
   // ─── Google Alerts News ────────────────────────
@@ -94,10 +97,10 @@ export async function handleAnalyticsRoutes(
         if (liveNews.length > 0 && env.DB) {
           await storeNewsAlerts(liveNews, env.DB);
         }
-      } catch {}
+      } catch (err) {
+        logger.warn('Fresh news fetch failed, serving cached:', { error: err });
+      }
     }
-
-    // Return from D1 (cached)
     if (env.DB) {
       const alerts = category
         ? await getNewsAlertsByCategory(env.DB, category, limit)

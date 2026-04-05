@@ -14,6 +14,8 @@ let cycleRegime: MarketRegime | null = null;
 let cycleContext: string[] = [];
 let cyclePending = false;
 let cycleIndicators: Map<string, TechnicalIndicator[]> = new Map();
+let cycleVolumeRatios: Map<string, number> = new Map();
+let cycleSignalScores: Map<string, number> = new Map();
 
 // Hourly alert budget
 const alertHistory: number[] = [];
@@ -32,6 +34,8 @@ export function getCycleOutputs(): EngineOutput[] { return cycleOutputs; }
 export function getCycleRegime(): MarketRegime | null { return cycleRegime; }
 export function getCycleContext(): string[] { return cycleContext; }
 export function getCycleIndicators(): Map<string, TechnicalIndicator[]> { return cycleIndicators; }
+export function getCycleVolumeRatios(): Map<string, number> { return cycleVolumeRatios; }
+export function getCycleSignalScores(): Map<string, number> { return cycleSignalScores; }
 export function isCyclePending(): boolean { return cyclePending; }
 
 // ═══════════════════════════════════════════════════════════════
@@ -43,6 +47,8 @@ export function beginCycle(): void {
   cycleContext = [];
   cycleRegime = null;
   cycleIndicators = new Map();
+  cycleVolumeRatios = new Map();
+  cycleSignalScores = new Map();
   cyclePending = true;
 }
 
@@ -70,6 +76,16 @@ export function resetCycle(): void {
   cycleContext = [];
   cycleRegime = null;
   cycleIndicators = new Map();
+  cycleVolumeRatios = new Map();
+  cycleSignalScores = new Map();
+}
+
+export function setCycleVolumeRatio(symbol: string, ratio: number): void {
+  cycleVolumeRatios.set(symbol, ratio);
+}
+
+export function setCycleSignalScore(symbol: string, score: number): void {
+  cycleSignalScores.set(symbol, score);
 }
 
 // ═══════════════════════════════════════════════════════════════

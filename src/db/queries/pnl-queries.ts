@@ -40,8 +40,9 @@ export async function getPnlDashboardData(db: D1Database): Promise<{
   tradesBySymbol: Array<{ symbol: string; count: number; pnl: number; win_rate: number }>;
   streaks: { currentStreak: number; currentType: 'WIN' | 'LOSS' | 'NONE'; longestWin: number; longestLoss: number };
 }> {
-  // Daily P&L (all time)
-  const dailyResult = await db.prepare(`SELECT * FROM daily_pnl ORDER BY date ASC`).all();
+  // Daily P&L (last 365 days — avoids full table scan)
+  const cutoff = new Date(Date.now() - 365 * 86_400_000).toISOString().split('T')[0];
+  const dailyResult = await db.prepare(`SELECT * FROM daily_pnl WHERE date >= ? ORDER BY date ASC`).bind(cutoff).all();
   const dailyPnl = (dailyResult.results || []) as unknown as DailyPnlRecord[];
 
   // Equity curve from daily_pnl

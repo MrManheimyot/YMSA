@@ -207,23 +207,3 @@ export function findTradablePairs(pairs: PairCorrelation[]): PairCorrelation[] {
     );
   });
 }
-
-/**
- * Format pair for alert
- */
-export function formatPairAlert(pair: PairCorrelation): string {
-  const direction = pair.currentZScore > 0
-    ? `Long ${pair.symbolB} / Short ${pair.symbolA}`
-    : `Long ${pair.symbolA} / Short ${pair.symbolB}`;
-
-  return [
-    `🔄 <b>Pairs Trade Signal</b>`,
-    `${pair.symbolA} ↔ ${pair.symbolB}`,
-    ``,
-    `📊 Z-Score: ${pair.currentZScore.toFixed(2)} (${Math.abs(pair.currentZScore) > 2 ? '🔴 Strong' : '🟡 Moderate'})`,
-    `📈 Correlation: ${pair.correlation.toFixed(3)}`,
-    `📉 Half-life: ${pair.halfLife.toFixed(1)} days`,
-    ``,
-    `🎯 Direction: ${direction}`,
-  ].join('\n');
-}

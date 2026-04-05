@@ -3,7 +3,9 @@
 
 import type { Env } from '../types';
 import * as yahooFinance from '../api/yahoo-finance';
+import { createLogger } from '../utils/logger';
 
+const logger = createLogger('MorningBrief');
 import * as polymarket from '../api/polymarket';
 import * as fred from '../api/fred';
 import * as finnhub from '../api/finnhub';
@@ -177,16 +179,12 @@ interface TechPick {
 }
 
 async function scanTechnicalConviction(env: Env): Promise<TechPick[]> {
-  const hardcodedUniverse = [
-    'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'NFLX', 'AMD', 'AVGO',
-    'CRM', 'INTC', 'QCOM', 'PANW', 'CRWD', 'PLTR', 'COIN', 'SMCI', 'ARM', 'MRVL',
-    'JPM', 'GS', 'BAC', 'V', 'MA', 'UNH', 'LLY', 'JNJ', 'PFE', 'MRNA',
-    'XOM', 'CVX', 'BA', 'CAT', 'GE', 'DE', 'RTX', 'LMT', 'HD', 'WMT',
-    'UBER', 'ABNB', 'SHOP', 'DASH', 'NET', 'DDOG', 'SNOW', 'SQ', 'RIVN', 'ENPH',
-  ];
   const envSymbols = (env.TIER1_WATCHLIST || env.DEFAULT_WATCHLIST || '').split(',').map((s) => s.trim()).filter(Boolean);
   const tier2 = (env.TIER2_WATCHLIST || '').split(',').map((s) => s.trim()).filter(Boolean);
-  const allSymbols = [...new Set([...envSymbols, ...tier2, ...hardcodedUniverse])].slice(0, 50);
+  const allSymbols = [...new Set([...envSymbols, ...tier2])].slice(0, 50);
+  if (allSymbols.length === 0) {
+    throw new Error('Missing TIER1_WATCHLIST/DEFAULT_WATCHLIST and TIER2_WATCHLIST — no symbols to scan for morning briefing');
+  }
 
   const picks: TechPick[] = [];
   const allQuotes = await yahooFinance.getMultipleQuotes(allSymbols);
@@ -353,7 +351,9 @@ async function sendMessage3(env: Env, unusualResult: any[], newsAlerts: any[], t
         }
       }
     }
-  } catch {}
+  } catch (err) {
+    logger.warn('Z.AI sentiment scoring failed:', { error: err });
+  }
 
   msg.push(``);
   msg.push(`━━━━━━━━━━━━━━━━━━━━━━━━━━━`);

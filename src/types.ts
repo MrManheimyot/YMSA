@@ -43,7 +43,7 @@ export interface Env {
   // Cloudflare Bindings
   BROWSER: any;              // Browser Rendering (Playwright)
   YMSA_CACHE?: KVNamespace;  // KV cache
-  YMSA_DATA?: R2Bucket;      // R2 storage
+  // YMSA_DATA reserved for Phase 2 R2 storage
   DB: D1Database;            // D1 database (always bound)
   AI?: any;                  // Workers AI (Z.AI engine)
   ORCHESTRATOR?: DurableObjectNamespace;  // Durable Object
@@ -119,7 +119,7 @@ export type IndicatorType =
   | 'ICHIMOKU_SPAN_B';
 
 export type Timeframe = '1min' | '5min' | '15min' | '1h' | '4h' | 'daily' | 'weekly' | 'monthly';
-export type DataSource = 'alpha_vantage' | 'finnhub' | 'taapi' | 'yahoo_finance' | 'finviz' | 'coingecko' | 'dexscreener' | 'tradingview' | 'cnbc' | 'marketwatch' | 'stocktwits' | 'sec_edgar';
+export type DataSource = 'finnhub' | 'taapi' | 'yahoo_finance' | 'finviz' | 'coingecko' | 'dexscreener' | 'tradingview' | 'cnbc' | 'marketwatch' | 'stocktwits' | 'sec_edgar';
 
 /**
  * Fibonacci retracement calculation result

@@ -21,6 +21,7 @@ crons = [
   "0 15 * * 1-5",         # 17:00 IST — Evening post-market summary
   "0 21 * * 1-5",          # 23:00 IST — Daily execution summary + holdings
   "30 21 * * 1-5",        # 23:30 IST — After-hours/overnight setup
+  "30 22 * * 1-5",        # 00:30 IST — After-hours news scan (post-earnings)
   "0 7 * * SUN",          # Sunday 09:00 IST — Weekly portfolio review
   "0 3 * * SAT",          # Saturday 05:00 IST — ML retrain + pairs recalibrate
   "0 0 1 * *",            # 1st of month 02:00 IST — Monthly performance report
@@ -56,10 +57,10 @@ cpu_ms = 300_000       # 5 minutes per invocation (paid max)
 binding = "YMSA_CACHE"
 id = "a110e14c46e440dcad5a9f46a32e85b9"
 
-# ─── R2 Bucket ───────────────────────────────────────────────
-[[r2_buckets]]
-binding = "YMSA_DATA"
-bucket_name = "ymsa-data"
+# ─── R2 Bucket (reserved for Phase 2 — large data export storage) ──
+# [[r2_buckets]]
+# binding = "YMSA_DATA"
+# bucket_name = "ymsa-data"
 
 # ─── Durable Objects (enable in Phase 2) ─────────────────────
 # [durable_objects]

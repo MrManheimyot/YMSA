@@ -10,20 +10,22 @@ import { preloadQuoteCache, clearQuoteCache, prefetchOHLCV } from '../api/yahoo-
 import { scanSymbolsBulk } from '../api/tradingview';
 import { computeIndicators } from '../analysis/indicators';
 import { calculateFibonacci } from '../analysis/fibonacci';
-import { detectSignals } from '../analysis/signals';
+import { detectSignals, calculateSignalScore } from '../analysis/signals';
 import { analyzeMultiTimeframe } from '../analysis/multi-timeframe';
 import { analyzeSmartMoney } from '../analysis/smart-money';
 import { detectRegime, formatRegimeAlert } from '../analysis/regime';
 import { setCurrentRegime } from '../alert-formatter';
-import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical } from '../broker-manager';
+import { beginCycle, flushCycle, setRegime, addContext, pushSmartMoney, pushMTF, pushTechnical, setCycleVolumeRatio, setCycleSignalScore } from '../broker-manager';
 import { executeBatch, formatBatchResults, type ExecutableSignal } from '../execution/engine';
 import { sendExecutionAlert } from '../broker-manager';
 import { recordEnginePerformance } from '../execution/portfolio';
 import { validateQuote, validateIndicators, validateEnvThresholds } from '../utils/data-validator';
 import { detectDataAnomalies, isZAiAvailable } from '../ai/z-engine';
 import { createSimulatedTrades, resolveSimulatedTrades, syncMissingOutcomes } from '../execution/simulator';
-import { getOpenTrades } from '../db/queries';
+import { getOpenTrades, updateTrailingState } from '../db/queries';
 import { closeTradeWithReview } from '../execution/engine';
+import { updateTrailingStop } from '../execution/trailing';
+import type { TrailingState } from '../execution/trailing';
 import { runRegimeScan } from './engine-scans';
 import { runMTFScan, runSmartMoneyScan, runOptionsScan, runEventDrivenScan } from './engine-scans';
 import { runCryptoWhaleScan, runPolymarketScan, runCommodityScan, runPairsScan, runScraperScan } from './engine-scans';
@@ -235,6 +237,16 @@ export async function runStockTechnicalScan(env: Env, label: string): Promise<vo
     const fibonacci = ohlcv.length > 0 ? calculateFibonacci(symbol, ohlcv, quote.price) : null;
     const signals = detectSignals(quote, indicators, fibonacci, env);
 
+    // Store volume ratio for downstream volume gate in flushCycle
+    if (quote.volume > 0 && quote.avgVolume > 0) {
+      setCycleVolumeRatio(symbol, quote.volume / quote.avgVolume);
+    }
+
+    // Signal score gate: skip weak signals (score < 65)
+    const signalScore = calculateSignalScore(signals);
+    if (signalScore > 0) setCycleSignalScore(symbol, signalScore);
+    if (signalScore < 65 && signals.length > 0) continue;
+
     const importantSignals = signals.filter((s) => s.priority === 'CRITICAL' || s.priority === 'IMPORTANT');
     if (importantSignals.length > 0) {
       pushTechnical(importantSignals, quote, indicators, fibonacci);
@@ -374,12 +386,20 @@ export async function runOpeningRangeBreak(env: Env): Promise<void> {
         pushMTF(mtf);
         const quote = await yahooFinance.getQuote(symbol);
         if (quote) {
+          // Compute real ATR from OHLCV — skip signal if unavailable
+          const ohlcv = await yahooFinance.getOHLCV(symbol, '1mo', '1d').catch(() => []);
+          const indicators = ohlcv.length > 0 ? computeIndicators(symbol, ohlcv) : [];
+          const realAtr = indicators.find(i => i.indicator === 'ATR')?.value;
+          if (!realAtr) {
+            logger.warn(`ORB ${symbol}: ATR unavailable, skipping signal`);
+            continue;
+          }
           signals.push({
             engineId: 'MTF_MOMENTUM', symbol,
             direction: mtf.suggestedAction === 'WAIT' ? 'BUY' : mtf.suggestedAction,
             strength: mtf.confluence,
             signalType: mtf.suggestedAction === 'BUY' ? 'MTF_CONFLUENCE_BUY' : 'MTF_CONFLUENCE_SELL',
-            entryPrice: quote.price, atr: quote.price * 0.02,
+            entryPrice: quote.price, atr: realAtr,
           });
         }
       }
@@ -425,6 +445,29 @@ export async function runQuickPulse(env: Env): Promise<void> {
         logger.info(`TP hit: ${trade.symbol} @ $${price.toFixed(2)}`, { tp: trade.take_profit });
         await closeTradeWithReview(trade, trade.take_profit, env);
         continue;
+      }
+
+      // ── Trailing stop update — lock in profits during favorable moves ──
+      if ((trade as any).trailing_state && env.DB) {
+        try {
+          const trailState: TrailingState = JSON.parse((trade as any).trailing_state);
+          const result = updateTrailingStop(trailState, price);
+          if (result.newStopLoss !== trailState.currentStopLoss) {
+            logger.info(`Trailing stop updated: ${trade.symbol} ${trailState.phase}→${result.phase} SL $${trailState.currentStopLoss.toFixed(2)}→$${result.newStopLoss.toFixed(2)}`);
+            const updatedState: TrailingState = {
+              ...trailState,
+              phase: result.phase,
+              currentStopLoss: result.newStopLoss,
+              highWaterMark: result.highWaterMark,
+              partialTpTriggered: result.partialTp
+                ? [...trailState.partialTpTriggered, result.partialTp.levelIndex]
+                : trailState.partialTpTriggered,
+            };
+            await updateTrailingState(env.DB, trade.id, result.newStopLoss, JSON.stringify(updatedState));
+          }
+        } catch (err) {
+          logger.warn(`Trailing stop parse/update failed for ${trade.symbol}:`, { error: err });
+        }
       }
     }
   } catch (err) {

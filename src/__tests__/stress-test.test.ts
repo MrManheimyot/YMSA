@@ -101,10 +101,10 @@ describe('Stress Test: Flash Crash', () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe('Stress Test: VIX Spike to 80', () => {
-  it('reduces position size to 25% at VIX >= 35', () => {
+  it('halts all trading at VIX >= 35 (zero position size)', () => {
     const adj = vixRiskAdjustment(80);
-    expect(adj.positionSizeMultiplier).toBe(0.25);
-    expect(adj.maxExposurePct).toBe(30);
+    expect(adj.positionSizeMultiplier).toBe(0.0);
+    expect(adj.maxExposurePct).toBe(0);
   });
 
   it('tightens stops to 50% at extreme VIX', () => {

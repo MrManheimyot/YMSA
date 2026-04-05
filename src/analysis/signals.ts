@@ -29,6 +29,28 @@ export function detectSignals(
   const proximity52w = parseFloat(env.ALERT_PROXIMITY_52W);
   const volumeMultiplier = parseFloat(env.VOLUME_SPIKE_MULTIPLIER);
 
+  // ─── ATR Volatility Filter: skip dangerously volatile stocks (ATR > 5% of price) ──
+  const atrInd = indicators.find((i) => i.indicator === 'ATR');
+  if (atrInd && quote.price > 0 && (atrInd.value / quote.price) > 0.05) {
+    return signals; // too volatile — skip all signals
+  }
+
+  // ─── Price Momentum Filter: require ≥ 0.5% absolute move for directional signals ──
+  const hasSufficientMomentum = Math.abs(quote.changePercent) >= 0.5;
+
+  // ─── Candle Body Filter: require body > 50% of range (conviction check) ──
+  // Uses quote open/close/high/low if available
+  let hasStrongCandle = true;
+  if (quote.open && quote.open > 0 && quote.price > 0) {
+    const candleBody = Math.abs(quote.price - quote.open);
+    const candleRange = (quote.high && quote.low)
+      ? quote.high - quote.low
+      : Math.abs(quote.price - quote.open) * 2; // fallback
+    if (candleRange > 0) {
+      hasStrongCandle = candleBody / candleRange >= 0.5;
+    }
+  }
+
   // ─── Quality Gate: ADX + Trend Context ─────────────────
   const adx = indicators.find((i) => i.indicator === 'ADX');
   const ema200 = indicators.find((i) => i.indicator === 'EMA_200');
@@ -38,12 +60,14 @@ export function detectSignals(
   const ema50AboveEma200 = ema50 && ema200 ? ema50.value > ema200.value : true;
 
   // ─── RSI Signals (with anti-trap: no BUY if price < EMA200 & RSI < 40) ──
+  // Directional signals require momentum + candle body conviction
+  const canFireDirectional = hasSufficientMomentum && hasStrongCandle;
   const rsi = indicators.find((i) => i.indicator === 'RSI');
   if (rsi) {
     if (rsi.value <= rsiOversold) {
       // Anti-Trap: Block RSI oversold BUY in confirmed downtrend (only when EMA data available)
       const isFallingKnife = ema200 && ema50 && !priceAboveEma200 && !ema50AboveEma200 && rsi.value < 40;
-      if (!isFallingKnife) {
+      if (!isFallingKnife && canFireDirectional) {
         signals.push({
           type: 'RSI_OVERSOLD',
           priority: rsi.value <= 25 ? 'CRITICAL' : 'IMPORTANT',
@@ -59,7 +83,7 @@ export function detectSignals(
       // Anti-Trap: Block RSI overbought SELL in confirmed strong uptrend
       // Only apply when EMA data is actually available
       const isTrendPush = ema200 && ema50 && priceAboveEma200 && ema50AboveEma200 && rsi.value < 80;
-      if (!isTrendPush) {
+      if (!isTrendPush && canFireDirectional) {
         signals.push({
           type: 'RSI_OVERBOUGHT',
           priority: rsi.value >= 75 ? 'CRITICAL' : 'IMPORTANT',
@@ -81,7 +105,7 @@ export function detectSignals(
     const hasTrend = adxValue > 20; // Only fire crosses in trending markets
 
     // Golden Cross: EMA50 crosses above EMA200
-    if (hasTrend && ema50.value > ema200.value && prevEma50 && prevEma200 && prevEma50.value <= prevEma200.value) {
+    if (hasTrend && canFireDirectional && ema50.value > ema200.value && prevEma50 && prevEma200 && prevEma50.value <= prevEma200.value) {
       signals.push({
         type: 'GOLDEN_CROSS',
         priority: 'CRITICAL',
@@ -95,7 +119,7 @@ export function detectSignals(
     }
 
     // Death Cross: EMA50 crosses below EMA200
-    if (hasTrend && ema50.value < ema200.value && prevEma50 && prevEma200 && prevEma50.value >= prevEma200.value) {
+    if (hasTrend && canFireDirectional && ema50.value < ema200.value && prevEma50 && prevEma200 && prevEma50.value >= prevEma200.value) {
       signals.push({
         type: 'DEATH_CROSS',
         priority: 'CRITICAL',
@@ -138,6 +162,7 @@ export function detectSignals(
 
     // Bullish MACD crossover — require histogram > 0 (confirmation)
     if (
+      canFireDirectional &&
       macd.value > macdSignal.value &&
       histPositive &&
       prevMacd && prevMacdSignal &&
@@ -157,6 +182,7 @@ export function detectSignals(
 
     // Bearish MACD crossover — require histogram < 0 (confirmation)
     if (
+      canFireDirectional &&
       macd.value < macdSignal.value &&
       histNegative &&
       prevMacd && prevMacdSignal &&

@@ -47,16 +47,23 @@ export function mergeBySymbol(outputs: EngineOutput[]): MergedTrade[] {
         ? Math.abs(best.tp1! - best.entry!) / Math.abs(best.entry! - best.stopLoss!)
         : 0;
 
-      // Express lane criteria: confidence ≥ 90, R:R ≥ 2.5, regime-aligned, not conflicting
+      // Express lane criteria: confidence ≥ 95, R:R ≥ 3.0, regime-aligned, not conflicting, VIX < 20
       const isRegimeAligned = !regime || (
         (dir === 'BUY' && regime.regime !== 'TRENDING_DOWN') ||
         (dir === 'SELL' && regime.regime !== 'TRENDING_UP')
       );
+      const isLowVix = !regime || regime.vix < 20;
+      const adxValue = regime?.adx ?? 0;
+      const hasStrongTrend = adxValue > 25;
 
       if (
         best.confidence >= expressLaneMinConf &&
+        best.confidence >= 95 &&
         rr >= expressLaneMinRR &&
+        rr >= 3.0 &&
         isRegimeAligned &&
+        isLowVix &&
+        hasStrongTrend &&
         !conflicting
       ) {
         // Express lane approved — pass through with -5 confidence penalty

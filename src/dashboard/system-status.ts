@@ -18,7 +18,7 @@ export interface SystemStatus {
 
 export function getSystemStatus(env: Env): SystemStatus {
   const secretKeys = [
-    'ALPHA_VANTAGE_API_KEY', 'TAAPI_API_KEY', 'FINNHUB_API_KEY',
+    'TAAPI_API_KEY', 'FINNHUB_API_KEY',
     'FRED_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
     'ALPACA_API_KEY', 'ALPACA_SECRET_KEY',
   ];
@@ -62,7 +62,6 @@ export function getSystemStatus(env: Env): SystemStatus {
     ],
     apis: {
       yahoo_finance: { name: 'Yahoo Finance', status: 'active', keyRequired: false },
-      alpha_vantage: { name: 'Alpha Vantage', status: secrets.ALPHA_VANTAGE_API_KEY ? 'configured' : 'missing-key', keyRequired: true },
       taapi: { name: 'TAAPI.io', status: secrets.TAAPI_API_KEY ? 'configured' : 'missing-key', keyRequired: true },
       finnhub: { name: 'Finnhub', status: secrets.FINNHUB_API_KEY ? 'configured' : 'missing-key', keyRequired: true },
       fred: { name: 'FRED', status: secrets.FRED_API_KEY ? 'configured' : 'missing-key', keyRequired: true },

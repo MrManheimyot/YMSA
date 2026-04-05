@@ -54,7 +54,9 @@ export async function runEveningSummary(env: Env): Promise<void> {
         }
       }
     }
-  } catch {}
+  } catch (err) {
+    logger.error('Google Alerts fetch failed in evening summary:', err);
+  }
 
   lines.push(``, `━━━━━━━━━━━━━━━━━━━━━━`);
   lines.push(`🌙 <i>See you tomorrow!</i>`);
@@ -225,7 +227,9 @@ export async function runWeeklyReview(env: Env): Promise<void> {
       try {
         const regime = await detectRegime(env);
         if (regime) regimeLabel = regime.regime.replace('_', ' ');
-      } catch {}
+      } catch (err) {
+        logger.warn('Regime detection failed in weekly review:', { error: err });
+      }
 
       const narrative = await weeklyNarrative((env as any).AI, {
         weeklyPnl, weeklyPnlPct, winRate: metrics.winRate || 0,

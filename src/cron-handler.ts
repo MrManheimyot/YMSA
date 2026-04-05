@@ -26,6 +26,8 @@ export { runRegimeScan, runMTFScan, runSmartMoneyScan, runCryptoWhaleScan, runPo
 export { runEveningSummary, runDailySummary, runAfterHoursScan, runWeeklyReview, runMiddayRebalance, runMonthlyPerformance } from './cron/summaries';
 export { runOvernightSetup, runMLRetrain } from './cron/overnight';
 export { runPreMarketScan } from './cron/premarket-scan';
+export { scanRussell1000, rescanR1KMovers, sendR1KReport } from './cron/r1k-scanner';
+export { runSuperpowerScan, runSuperpowerQuick } from './cron/superpower-scan';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -95,6 +97,7 @@ function identifyCronJob(cron: string): CronJobType {
   if (cron === '0 15 * * 1-5') return 'EVENING_SUMMARY';
   if (cron === '0 21 * * 1-5') return 'DAILY_SUMMARY';
   if (cron === '30 21 * * 1-5') return 'OVERNIGHT_SETUP';
+  if (cron === '30 22 * * 1-5') return 'AFTER_HOURS_SCAN';
   if (cron === '0 7 * * SUN' || cron === '0 7 * * 0') return 'WEEKLY_REVIEW';
   if (cron === '0 3 * * SAT' || cron === '0 3 * * 6') return 'ML_RETRAIN';
   if (cron === '0 0 1 * *') return 'MONTHLY_PERFORMANCE';
