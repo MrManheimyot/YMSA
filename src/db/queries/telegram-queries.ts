@@ -6,13 +6,28 @@ import type { TelegramAlertRecord } from './types';
 
 export async function insertTelegramAlert(db: D1Database, alert: Omit<TelegramAlertRecord, 'outcome' | 'outcome_price' | 'outcome_pnl' | 'outcome_pnl_pct' | 'outcome_notes' | 'outcome_at'>): Promise<void> {
   await db.prepare(
-    `INSERT INTO telegram_alerts (id, symbol, action, engine_id, entry_price, stop_loss, take_profit_1, take_profit_2, confidence, alert_text, outcome, regime, metadata, sent_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?)`
+    `INSERT INTO telegram_alerts (id, symbol, action, engine_id, entry_price, stop_loss, take_profit_1, take_profit_2, confidence, alert_text, outcome, regime, metadata, sent_at, gate_status)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)`
   ).bind(
     alert.id, alert.symbol, alert.action, alert.engine_id,
     alert.entry_price, alert.stop_loss, alert.take_profit_1, alert.take_profit_2,
-    alert.confidence, alert.alert_text, alert.regime, alert.metadata, alert.sent_at
+    alert.confidence, alert.alert_text, alert.regime, alert.metadata, alert.sent_at,
+    alert.gate_status || 'PENDING_REVIEW'
   ).run();
+}
+
+export async function updateTelegramAlertGateStatus(
+  db: D1Database, id: string, status: 'APPROVED' | 'REJECTED', adjustedConfidence?: number, rejectReason?: string
+): Promise<void> {
+  if (adjustedConfidence != null) {
+    await db.prepare(
+      `UPDATE telegram_alerts SET gate_status = ?, confidence = ?, outcome_notes = COALESCE(outcome_notes || ' | ', '') || ? WHERE id = ?`
+    ).bind(status, adjustedConfidence, rejectReason || status, id).run();
+  } else {
+    await db.prepare(
+      `UPDATE telegram_alerts SET gate_status = ?, outcome_notes = COALESCE(outcome_notes || ' | ', '') || ? WHERE id = ?`
+    ).bind(status, rejectReason || status, id).run();
+  }
 }
 
 export async function updateTelegramAlertOutcome(
@@ -31,7 +46,7 @@ export async function updateTelegramAlertOutcome(
 
 export async function getRecentTelegramAlerts(db: D1Database, limit: number = 50): Promise<TelegramAlertRecord[]> {
   const result = await db.prepare(
-    `SELECT * FROM telegram_alerts ORDER BY sent_at DESC LIMIT ?`
+    `SELECT * FROM telegram_alerts WHERE gate_status = 'APPROVED' ORDER BY sent_at DESC LIMIT ?`
   ).bind(limit).all();
   return (result.results || []) as unknown as TelegramAlertRecord[];
 }
@@ -62,7 +77,7 @@ export async function getTelegramAlertStats(db: D1Database): Promise<{
   expectancy: number;
   byEngine: Array<{ engine: string; total: number; wins: number; losses: number; winRate: number; avgConf: number; pnl: number }>;
 }> {
-  const all = await db.prepare(`SELECT * FROM telegram_alerts ORDER BY sent_at DESC`).all();
+  const all = await db.prepare(`SELECT * FROM telegram_alerts WHERE gate_status = 'APPROVED' ORDER BY sent_at DESC`).all();
   const alerts = (all.results || []) as unknown as TelegramAlertRecord[];
   const resolved = alerts.filter(a => a.outcome !== 'PENDING');
   const wins = alerts.filter(a => a.outcome === 'WIN');
@@ -127,19 +142,19 @@ export async function getTelegramAlertStats(db: D1Database): Promise<{
 
 // ─── Pending Alert Resolution Helpers ────────────────────────
 
-/** Get all PENDING alerts (for auto-resolution against current prices) */
+/** Get all PENDING + APPROVED alerts (for auto-resolution against current prices) */
 export async function getPendingTelegramAlerts(db: D1Database): Promise<TelegramAlertRecord[]> {
   const result = await db.prepare(
-    `SELECT * FROM telegram_alerts WHERE outcome = 'PENDING' ORDER BY sent_at ASC`
+    `SELECT * FROM telegram_alerts WHERE outcome = 'PENDING' AND gate_status = 'APPROVED' ORDER BY sent_at ASC`
   ).all();
   return (result.results || []) as unknown as TelegramAlertRecord[];
 }
 
-/** Expire PENDING alerts older than the given age in milliseconds */
+/** Expire PENDING APPROVED alerts older than the given age in milliseconds */
 export async function expireOldTelegramAlerts(db: D1Database, maxAgeMs: number): Promise<number> {
   const cutoff = Date.now() - maxAgeMs;
   const result = await db.prepare(
-    `UPDATE telegram_alerts SET outcome = 'EXPIRED', outcome_at = ?, outcome_notes = 'Auto-expired after timeout' WHERE outcome = 'PENDING' AND sent_at < ?`
+    `UPDATE telegram_alerts SET outcome = 'EXPIRED', outcome_at = ?, outcome_notes = 'Auto-expired after timeout' WHERE outcome = 'PENDING' AND gate_status = 'APPROVED' AND sent_at < ?`
   ).bind(Date.now(), cutoff).run();
   return result.meta?.changes ?? 0;
 }

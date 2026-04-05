@@ -97,6 +97,7 @@ export interface TelegramAlertRecord {
   regime: string | null;
   metadata: string | null;
   sent_at: number;
+  gate_status: 'PENDING_REVIEW' | 'APPROVED' | 'REJECTED';
 }
 
 // ─── Utility ─────────────────────────────────────────────────

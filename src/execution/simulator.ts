@@ -67,6 +67,17 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
       .map(t => `${t.symbol}:${t.side}`)
   );
 
+  // ─── Equity-based sizing: compute current sim equity from realized P&L ───
+  const closedTrades = existingTrades.filter(t => t.status === 'CLOSED' && t.broker_order_id?.startsWith('tga_'));
+  const realizedPnl = closedTrades.reduce((sum, t) => sum + (t.pnl ?? 0), 0);
+  const currentEquity = SIM_STARTING_EQUITY + realizedPnl;
+
+  // ─── Exposure limits ───
+  const MAX_OPEN_POSITIONS = 20;
+  const MAX_EXPOSURE_PCT = 0.80; // 80% of equity
+  const openSimTrades = existingTrades.filter(t => t.status === 'OPEN' && t.broker_order_id?.startsWith('tga_'));
+  let totalExposure = openSimTrades.reduce((sum, t) => sum + (t.entry_price * t.qty), 0);
+
   let created = 0;
   for (const alert of pending) {
     // Skip if already simulated
@@ -86,8 +97,21 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
     const oppositeKey = `${alert.symbol}:${alert.action === 'BUY' ? 'SELL' : 'BUY'}`;
     if (openPositions.has(oppositeKey)) continue;
 
+    // Exposure limits: max positions
+    if (openPositions.size >= MAX_OPEN_POSITIONS) {
+      logger.warn(`Max open positions (${MAX_OPEN_POSITIONS}) reached — skipping ${alert.symbol}`);
+      break;
+    }
+
     const tradeId = generateId(SIM_PREFIX);
-    const qty = calculateSimQty(alert);
+    const qty = calculateSimQty(alert, currentEquity);
+
+    // Exposure limits: max total exposure
+    const positionValue = alert.entry_price * qty;
+    if (totalExposure + positionValue > currentEquity * MAX_EXPOSURE_PCT) {
+      logger.warn(`Exposure limit (${(MAX_EXPOSURE_PCT * 100).toFixed(0)}%) would be breached — skipping ${alert.symbol}`);
+      continue;
+    }
 
     await insertTrade(env.DB, {
       id: tradeId,
@@ -105,21 +129,23 @@ export async function createSimulatedTrades(env: Env): Promise<number> {
     });
 
     openPositions.add(posKey); // prevent further dupes in this batch
+    totalExposure += positionValue;
     created++;
   }
 
   if (created > 0) {
-    logger.info(`Created ${created} simulated trades from pending alerts`);
+    logger.info(`Created ${created} simulated trades from pending alerts (equity: $${currentEquity.toFixed(0)})`);
   }
   return created;
 }
 
 /**
  * Calculate simulated quantity based on a fixed-risk model.
- * Risk 2% of SIM_STARTING_EQUITY per trade, sized by distance to stop loss.
+ * Risk 2% of current equity per trade, sized by distance to stop loss.
  */
-function calculateSimQty(alert: TelegramAlertRecord): number {
-  const riskAmount = SIM_STARTING_EQUITY * 0.02; // 2% risk = $2,000
+function calculateSimQty(alert: TelegramAlertRecord, currentEquity: number): number {
+  const equity = Math.max(currentEquity, SIM_STARTING_EQUITY * 0.1); // floor at 10% to prevent zero sizing
+  const riskAmount = equity * 0.02; // 2% risk
   const entry = alert.entry_price;
   const sl = alert.stop_loss;
 
@@ -131,8 +157,9 @@ function calculateSimQty(alert: TelegramAlertRecord): number {
     }
   }
 
-  // Fallback: invest ~$10,000 per position
-  return Math.max(1, Math.floor(10_000 / entry));
+  // Fallback: invest ~10% of equity per position
+  const fallbackAllocation = equity * 0.10;
+  return Math.max(1, Math.floor(fallbackAllocation / entry));
 }
 
 // ─── Simulated Trade Resolution ──────────────────────────────

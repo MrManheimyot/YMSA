@@ -4,7 +4,7 @@ import type { Env } from '../types';
 import type { MergedTrade, MessagePlan } from './types';
 import type { MergedTradeInfo } from '../ai/z-engine';
 import { synthesizeSignal, validateTradeSetup, isZAiAvailable, recordZAiCall, recordValidationResult } from '../ai/z-engine';
-import { insertTelegramAlert, generateId } from '../db/queries';
+import { insertTelegramAlert, updateTelegramAlertGateStatus, generateId } from '../db/queries';
 import { validateTradeParams, validateSignalConsistency, buildDataQualityReport } from '../utils/data-validator';
 import {
   getCycleOutputs, getCycleRegime, getCycleIndicators,
@@ -19,6 +19,38 @@ import type { SourceObservation } from '../agents/reliability';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('FlushCycle');
+
+/** Insert a REJECTED alert to D1 for audit trail — ensures rejected signals don't contaminate simulator */
+async function logRejectedAlert(
+  env: Env,
+  trade: MergedTrade,
+  regime: { regime: string; confidence: number } | null,
+  rejectReason: string,
+): Promise<void> {
+  if (!env.DB) return;
+  try {
+    const id = generateId('tga');
+    await insertTelegramAlert(env.DB, {
+      id,
+      symbol: trade.symbol,
+      action: trade.direction as 'BUY' | 'SELL',
+      engine_id: trade.engines.join('+'),
+      entry_price: trade.entry,
+      stop_loss: trade.stopLoss,
+      take_profit_1: trade.tp1,
+      take_profit_2: trade.tp2,
+      confidence: trade.confidence,
+      alert_text: '',
+      regime: regime?.regime || null,
+      metadata: JSON.stringify({ engines: trade.engines, reasons: trade.reasons, signals: trade.signals }),
+      sent_at: Date.now(),
+      gate_status: 'REJECTED',
+    });
+    await updateTelegramAlertGateStatus(env.DB, id, 'REJECTED', undefined, rejectReason);
+  } catch (err) {
+    logger.error(`Failed to log rejected alert for ${trade.symbol}:`, err);
+  }
+}
 
 // Sector-level correlation matrix — hardcoded for top symbols.
 // Values represent approximate 90-day rolling correlations.
@@ -45,55 +77,23 @@ export async function flushCycle(env: Env): Promise<number> {
   // 1. Merge engine outputs per symbol → trade alerts
   const trades = mergeBySymbol(outputs);
 
-  // 1b. Log ALL qualifying merged trades to D1 for win/loss tracking
+  // Track logged alert IDs for Telegram text update after send
   const loggedTradeIds = new Map<string, string>();
-  if (env.DB && trades.length > 0) {
-    for (const t of trades) {
-      if (t.confidence < 55) continue;
-      if (t.conflicting && t.confidence < 70) continue;
-      const key = `${t.symbol}:${t.direction}`;
-      if (wasSentRecently(key)) continue;
-      try {
-        const tgaId = generateId('tga');
-        await insertTelegramAlert(env.DB, {
-          id: tgaId,
-          symbol: t.symbol,
-          action: t.direction as 'BUY' | 'SELL',
-          engine_id: t.engines.join('+'),
-          entry_price: t.entry,
-          stop_loss: t.stopLoss,
-          take_profit_1: t.tp1,
-          take_profit_2: t.tp2,
-          confidence: t.confidence,
-          alert_text: '',
-          regime: regime?.regime || null,
-          metadata: JSON.stringify({ engines: t.engines, reasons: t.reasons, signals: t.signals }),
-          sent_at: Date.now(),
-        });
-        loggedTradeIds.set(key, tgaId);
-        markSent(key);
-      } catch (err) {
-        console.error(`[Broker] Alert D1 insert failed for ${t.symbol}:`, err);
-      }
-    }
-  }
 
-  // Individual trade alerts — one per stock
+  // Individual trade alerts — one per stock (gates → D1 insert → Telegram)
   const approvedSymbols: string[] = [];
   for (const trade of trades) {
-    // Gap 3 Fix: No tracking = no send
-    if (env.DB) {
-      const key = `${trade.symbol}:${trade.direction}`;
-      if (!loggedTradeIds.has(key)) {
-        logger.info(`Skipping ${trade.symbol} ${trade.direction} — not tracked in D1`);
-        continue;
-      }
-    }
+    // Pre-filter: minimum confidence and dedup
+    if (trade.confidence < 55) continue;
+    if (trade.conflicting && trade.confidence < 70) continue;
+    const key = `${trade.symbol}:${trade.direction}`;
+    if (wasSentRecently(key)) continue;
 
     // GAP-015: Correlation check — block highly-correlated duplicate exposure
     const corrResult = correlationCheck(trade.symbol, approvedSymbols, CORRELATION_MATRIX);
     if (!corrResult.approved) {
       logger.warn(`${trade.symbol} BLOCKED by correlation check: ${corrResult.violations.join(', ')}`);
+      await logRejectedAlert(env, trade, regime, `Correlation: ${corrResult.violations.join(', ')}`);
       continue;
     }
 
@@ -124,6 +124,7 @@ export async function flushCycle(env: Env): Promise<number> {
 
     if (!qualityReport.passedGate) {
       logger.warn(`${trade.symbol} ${trade.direction} BLOCKED by data quality gate (score: ${qualityReport.overallScore}/100, fails: ${qualityReport.failCount})`);
+      await logRejectedAlert(env, trade, regime, `Quality gate: score ${qualityReport.overallScore}/100`);
       continue;
     }
 
@@ -142,6 +143,7 @@ export async function flushCycle(env: Env): Promise<number> {
     const reliabilityContext = formatForZAi(reliabilityVerdict);
 
     // Apply reliability confidence multiplier
+    const originalConfidence = trade.confidence;
     const adjustedConfidence = Math.round(trade.confidence * reliabilityVerdict.confidenceMultiplier);
     if (adjustedConfidence !== trade.confidence) {
       logger.info(`Reliability adjusted ${trade.symbol} confidence: ${trade.confidence} → ${adjustedConfidence} (${reliabilityVerdict.trustTier}, multiplier ${reliabilityVerdict.confidenceMultiplier.toFixed(2)}x)`);
@@ -151,6 +153,7 @@ export async function flushCycle(env: Env): Promise<number> {
     // Block trades with UNTRUSTED reliability
     if (reliabilityVerdict.trustTier === 'UNTRUSTED') {
       logger.warn(`${trade.symbol} ${trade.direction} BLOCKED by Reliability Agent (trust: ${reliabilityVerdict.trustScore}/100 UNTRUSTED)`);
+      await logRejectedAlert(env, trade, regime, `IRA UNTRUSTED: trust ${reliabilityVerdict.trustScore}/100`);
       continue;
     }
 
@@ -187,6 +190,7 @@ export async function flushCycle(env: Env): Promise<number> {
 
         if (zValidation.verdict === 'REJECT') {
           logger.info(`Z.AI REJECTED ${trade.symbol} ${trade.direction}: ${zValidation.reason} (conf: ${zValidation.confidence})`);
+          await logRejectedAlert(env, trade, regime, `Z.AI REJECT: ${zValidation.reason}`);
           continue;
         }
 
@@ -197,9 +201,36 @@ export async function flushCycle(env: Env): Promise<number> {
       } catch (err) { logger.error('Z.AI validation failed:', err); }
     }
 
+    // ─── ALL GATES PASSED — Insert APPROVED alert to D1 ───
+    const tgaId = generateId('tga');
+    if (env.DB) {
+      try {
+        await insertTelegramAlert(env.DB, {
+          id: tgaId,
+          symbol: trade.symbol,
+          action: trade.direction as 'BUY' | 'SELL',
+          engine_id: trade.engines.join('+'),
+          entry_price: trade.entry,
+          stop_loss: trade.stopLoss,
+          take_profit_1: trade.tp1,
+          take_profit_2: trade.tp2,
+          confidence: trade.confidence, // post-IRA adjusted
+          alert_text: '',
+          regime: regime?.regime || null,
+          metadata: JSON.stringify({ engines: trade.engines, reasons: trade.reasons, signals: trade.signals, originalConfidence, trustTier: reliabilityVerdict.trustTier, trustScore: reliabilityVerdict.trustScore }),
+          sent_at: Date.now(),
+          gate_status: 'APPROVED',
+        });
+        loggedTradeIds.set(key, tgaId);
+        markSent(key);
+      } catch (err) {
+        console.error(`[Broker] Alert D1 insert failed for ${trade.symbol}:`, err);
+        continue; // No tracking = no send
+      }
+    }
+
     const plan = planTradeAlert(trade, aiReasoning);
     if (plan) {
-      markSent(`${trade.symbol}:${trade.direction}`);
       recordTradeAlert();
       approvedSymbols.push(trade.symbol);
       (plan as any)._trade = trade;

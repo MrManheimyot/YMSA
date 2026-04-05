@@ -82,6 +82,7 @@ export async function sendTelegramAlert(
           regime: currentRegime,
           metadata: JSON.stringify({ signals: signals.map(s => ({ type: s.type, priority: s.priority, title: s.title })) }),
           sent_at: Date.now(),
+          gate_status: 'APPROVED',
         });
       } catch (logErr) {
         console.error('[Telegram] Alert log to D1 failed:', logErr);

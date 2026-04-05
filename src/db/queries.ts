@@ -6,7 +6,7 @@ export { insertTrade, closeTrade, getOpenTrades, cancelTrade, getTradesByEngine,
 export { insertSignal, getRecentSignals, getSignalsByEngine, upsertEnginePerformance, getEnginePerformance, getAllLatestEnginePerformance, upsertEngineBudget, loadEngineBudgets } from './queries/signal-engine-queries';
 export { upsertDailyPnl, getDailyPnlRange, getRecentDailyPnl, getPnlDashboardData } from './queries/pnl-queries';
 export { insertRegimeChange, getLatestRegime, insertRiskEvent, getRecentRiskEvents, getRecentNewsAlerts, getNewsAlertsByCategory, getKillSwitchState, upsertKillSwitchState } from './queries/system-queries';
-export { insertTelegramAlert, updateTelegramAlertOutcome, getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, getPendingTelegramAlerts, expireOldTelegramAlerts } from './queries/telegram-queries';
+export { insertTelegramAlert, updateTelegramAlertOutcome, updateTelegramAlertGateStatus, getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, getPendingTelegramAlerts, expireOldTelegramAlerts } from './queries/telegram-queries';
 export { loadConfig, getConfig, getAllConfig, setConfig, applyTier, TIER_PRESETS } from './queries/config-queries';
 export { insertRSSItem, updateRSSSentiment, getRecentRSSItems, getRSSItemsForSymbol, insertTVScannerSnapshot, getLatestTVSnapshot, insertSocialSentiment, getLatestSentiment, getRecentSentimentAll, updateFeedHealth, getFeedHealthReport } from './queries/superpower-queries';
 export { insertCandidate, insertCandidatesBatch, promoteTopCandidates, getPromotedCandidates, getCandidateStats, markCandidatesEvaluated, cleanOldCandidates } from './queries/candidate-queries';
