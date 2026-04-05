@@ -73,6 +73,7 @@ export async function handleTradingRoutes(
     const job = url.searchParams.get('job');
     const validJobs: Record<string, string> = {
       morning: '0 5 * * 1-5',
+      premarket: '0 12 * * 1-5',
       open: '30 14 * * 1-5',
       opening_range: '45 14 * * 1-5',
       quick: '*/15 14-21 * * 1-5',

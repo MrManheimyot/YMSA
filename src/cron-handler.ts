@@ -17,12 +17,14 @@ import { runMorningBriefing } from './cron/morning-briefing';
 import { runFullScan, runQuickScan, runOpeningRangeBreak, runQuickPulse } from './cron/market-scans';
 import { runEveningSummary, runDailySummary, runAfterHoursScan, runWeeklyReview, runMiddayRebalance, runMonthlyPerformance } from './cron/summaries';
 import { runOvernightSetup, runMLRetrain } from './cron/overnight';
+import { runPreMarketScan } from './cron/premarket-scan';
 
 export { runMorningBriefing } from './cron/morning-briefing';
-export { runFullScan, runQuickScan, runStockTechnicalScan, runOpeningRangeBreak, runQuickPulse, getWatchlist, getCryptoWatchlist, getTier2Watchlist } from './cron/market-scans';
+export { runFullScan, runQuickScan, runStockTechnicalScan, runOpeningRangeBreak, runQuickPulse, getWatchlist, getCryptoWatchlist, getTier2Watchlist, getPromotedWatchlist } from './cron/market-scans';
 export { runRegimeScan, runMTFScan, runSmartMoneyScan, runCryptoWhaleScan, runPolymarketScan, runCommodityScan, runPairsScan, runOptionsScan, runEventDrivenScan, runScraperScan } from './cron/engine-scans';
 export { runEveningSummary, runDailySummary, runAfterHoursScan, runWeeklyReview, runMiddayRebalance, runMonthlyPerformance } from './cron/summaries';
 export { runOvernightSetup, runMLRetrain } from './cron/overnight';
+export { runPreMarketScan } from './cron/premarket-scan';
 
 /**
  * Main cron event handler — routes to appropriate job type
@@ -49,6 +51,7 @@ export async function handleCronEvent(cron: string, env: Env): Promise<void> {
   try {
     switch (jobType) {
       case 'MORNING_BRIEFING':      await runMorningBriefing(env); break;
+      case 'PREMARKET_SCAN':        await runPreMarketScan(env); break;
       case 'MARKET_OPEN_SCAN':      await runFullScan(env, 'Market Open'); break;
       case 'OPENING_RANGE_BREAK':   await runOpeningRangeBreak(env); break;
       case 'QUICK_PULSE_5MIN':      await runQuickPulse(env); break;
@@ -81,6 +84,7 @@ export async function handleCronEvent(cron: string, env: Env): Promise<void> {
 
 function identifyCronJob(cron: string): CronJobType {
   if (cron === '0 5 * * 1-5') return 'MORNING_BRIEFING';
+  if (cron === '0 12 * * 1-5') return 'PREMARKET_SCAN';
   if (cron === '30 14 * * 1-5') return 'MARKET_OPEN_SCAN';
   if (cron === '45 14 * * 1-5') return 'OPENING_RANGE_BREAK';
   if (cron.startsWith('*/5')) return 'QUICK_PULSE_5MIN';

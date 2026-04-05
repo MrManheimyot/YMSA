@@ -11,6 +11,7 @@ account_id = "25d6c25b2232bbe0a5ae57c6fde9921c"
 [triggers]
 crons = [
   "0 5 * * 1-5",          # 07:00 IST — Morning pre-market briefing
+  "0 12 * * 1-5",         # 14:00 IST / 08:00 ET — Pre-market universe scan + candidate promotion
   "30 14 * * 1-5",        # US Market Open — Full scan + regime detection
   "45 14 * * 1-5",        # 15min after open — Opening Range Break scan
   "*/5 14-21 * * 1-5",    # Every 5min during US market hours (quick pulse)

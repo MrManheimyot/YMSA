@@ -9,3 +9,5 @@ export { insertRegimeChange, getLatestRegime, insertRiskEvent, getRecentRiskEven
 export { insertTelegramAlert, updateTelegramAlertOutcome, getRecentTelegramAlerts, getTelegramAlertById, getTelegramAlertStats, getPendingTelegramAlerts, expireOldTelegramAlerts } from './queries/telegram-queries';
 export { loadConfig, getConfig, getAllConfig, setConfig, applyTier, TIER_PRESETS } from './queries/config-queries';
 export { insertRSSItem, updateRSSSentiment, getRecentRSSItems, getRSSItemsForSymbol, insertTVScannerSnapshot, getLatestTVSnapshot, insertSocialSentiment, getLatestSentiment, getRecentSentimentAll, updateFeedHealth, getFeedHealthReport } from './queries/superpower-queries';
+export { insertCandidate, insertCandidatesBatch, promoteTopCandidates, getPromotedCandidates, getCandidateStats, markCandidatesEvaluated, cleanOldCandidates } from './queries/candidate-queries';
+export type { ScanCandidate } from './queries/candidate-queries';

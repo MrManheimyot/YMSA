@@ -26,6 +26,7 @@ import { runRegimeScan } from './engine-scans';
 import { runMTFScan, runSmartMoneyScan, runOptionsScan, runEventDrivenScan } from './engine-scans';
 import { runCryptoWhaleScan, runPolymarketScan, runCommodityScan, runPairsScan, runScraperScan } from './engine-scans';
 import { runSuperpowerScan, runSuperpowerQuick } from './superpower-scan';
+import { getPromotedCandidates, markCandidatesEvaluated } from '../db/queries/candidate-queries';
 
 export function getWatchlist(env: Env): string[] {
   return env.DEFAULT_WATCHLIST.split(',').map((s) => s.trim());
@@ -37,6 +38,22 @@ export function getCryptoWatchlist(env: Env): string[] {
 
 export function getTier2Watchlist(env: Env): string[] {
   return (env.TIER2_WATCHLIST || '').split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * v3.5: Get promoted candidates from D1 scan_candidates table.
+ * These are high-scoring stocks discovered via TradingView/FinViz pre-market scans.
+ * Excludes symbols already in Tier 1 or Tier 2 to avoid duplicate processing.
+ */
+export async function getPromotedWatchlist(env: Env): Promise<string[]> {
+  if (!env.DB) return [];
+  try {
+    const promoted = await getPromotedCandidates(env.DB);
+    const existing = new Set([...getWatchlist(env), ...getTier2Watchlist(env)]);
+    return promoted.filter(s => !existing.has(s));
+  } catch {
+    return [];
+  }
 }
 
 export async function runQuickScan(env: Env): Promise<void> {
@@ -68,6 +85,7 @@ export async function runFullScan(env: Env, label: string): Promise<void> {
   await runRegimeScan(env);
   await runStockTechnicalScan(env, label);
   await runTier2TechnicalScan(env);
+  await runPromotedCandidateScan(env);  // v3.5: Universe expansion
   await runMTFScan(env);
   await runSmartMoneyScan(env);
   await runPairsScan(env);
@@ -228,6 +246,56 @@ async function runTier2TechnicalScan(env: Env): Promise<void> {
 
   if (count > 0) {
     logger.info(`Tier2: ${count} signals from ${tier2.length} stocks`);
+  }
+}
+
+/**
+ * v3.5 Universe Expansion: Promoted Candidate Scan.
+ * Scans stocks promoted by the pre-market pipeline (scan_candidates table).
+ * Same analysis as Tier 2 (lighter-weight, no anomaly detection).
+ * After evaluation, marks candidates as evaluated in D1.
+ */
+async function runPromotedCandidateScan(env: Env): Promise<void> {
+  const promoted = await getPromotedWatchlist(env);
+  if (promoted.length === 0) return;
+  let count = 0;
+
+  logger.info(`Scanning ${promoted.length} promoted candidates`);
+
+  for (const symbol of promoted) {
+    try {
+      const [quote, ohlcv] = await Promise.all([
+        yahooFinance.getQuote(symbol),
+        yahooFinance.getOHLCV(symbol, '2y', '1d'),
+      ]);
+      if (!quote) continue;
+
+      const quoteVal = validateQuote(quote, 'yahoo_finance');
+      if (!quoteVal.valid) continue;
+
+      const indicators = computeIndicators(symbol, ohlcv);
+      const fibonacci = ohlcv.length > 0 ? calculateFibonacci(symbol, ohlcv, quote.price) : null;
+      const signals = detectSignals(quote, indicators, fibonacci, env);
+
+      const important = signals.filter((s) => s.priority === 'CRITICAL' || s.priority === 'IMPORTANT');
+      if (important.length > 0) {
+        pushTechnical(important, quote, indicators, fibonacci);
+        count += important.length;
+      }
+    } catch (err) {
+      logger.error(`Promoted ${symbol} error`, err);
+    }
+  }
+
+  // Mark all promoted symbols as evaluated
+  if (env.DB && promoted.length > 0) {
+    await markCandidatesEvaluated(env.DB, promoted).catch(e =>
+      logger.error('Failed to mark candidates evaluated', e)
+    );
+  }
+
+  if (count > 0) {
+    logger.info(`Promoted: ${count} signals from ${promoted.length} candidates`);
   }
 }
 

@@ -24,6 +24,7 @@ import { fetchRSSFeeds, fetchYahooSymbolNews, storeRSSItems, type RSSItem } from
 
 // ── DB layer ──
 import { insertTVScannerSnapshot, insertSocialSentiment, updateFeedHealth } from '../db/queries';
+import { insertCandidatesBatch } from '../db/queries/candidate-queries';
 import { pushEventDriven, addContext } from '../broker-manager';
 import { scoreNewsSentiment, isZAiAvailable } from '../ai/z-engine';
 
@@ -102,21 +103,26 @@ async function runRSSIngestion(env: Env, maxTier?: 1 | 2 | 3): Promise<void> {
 
 /**
  * 2) TradingView Scanner — captures market snapshots via hidden bulk API.
- *    Stores top gainers, losers, high volume, oversold for trend detection.
+ *    v3.5: Expanded to 6 scan passes × 50 results. ALL discoveries stored
+ *    as candidates in scan_candidates table. Signal generation for ANY
+ *    qualifying symbol (watchlist gate removed).
  */
 async function runTVScannerCapture(env: Env): Promise<void> {
   try {
-    const scans: Array<{ type: 'top_gainers' | 'top_losers' | 'high_volume' | 'oversold'; limit: number }> = [
-      { type: 'top_gainers', limit: 20 },
-      { type: 'top_losers', limit: 20 },
-      { type: 'high_volume', limit: 20 },
-      { type: 'oversold', limit: 15 },
+    const scans: Array<{ type: 'top_gainers' | 'top_losers' | 'high_volume' | 'oversold' | 'overbought'; limit: number; source: string }> = [
+      { type: 'top_gainers', limit: 50, source: 'TV_GAINER' },
+      { type: 'top_losers', limit: 50, source: 'TV_LOSER' },
+      { type: 'high_volume', limit: 50, source: 'TV_VOLUME' },
+      { type: 'oversold', limit: 50, source: 'TV_OVERSOLD' },
+      { type: 'overbought', limit: 50, source: 'TV_OVERBOUGHT' },
     ];
 
     for (const scan of scans) {
       const results = await tradingview.scanMarket(scan.type, scan.limit);
+      if (results.length === 0) continue;
 
-      if (env.DB && results.length > 0) {
+      // Store snapshots to tv_scanner_snapshots (existing behavior)
+      if (env.DB) {
         for (const r of results) {
           const id = `tv_${scan.type}_${r.symbol}_${Date.now()}`;
           await insertTVScannerSnapshot(
@@ -124,13 +130,28 @@ async function runTVScannerCapture(env: Env): Promise<void> {
             r.volume, r.relativeVolume, r.rsi, r.marketCap, r.sector, r.recommendation
           );
         }
+
+        // v3.5: Store ALL results as candidates for universe pipeline
+        const candidates = results.map(r => ({
+          symbol: r.symbol,
+          source: scan.source,
+          direction: scan.type === 'top_gainers' || scan.type === 'oversold' ? 'BUY' as const
+            : scan.type === 'top_losers' || scan.type === 'overbought' ? 'SELL' as const
+            : (r.changePercent > 0 ? 'BUY' as const : 'SELL' as const),
+          price: r.close,
+          changePct: r.changePercent,
+          volume: r.volume,
+          volumeRatio: r.relativeVolume,
+          rsi: r.rsi,
+          marketCap: r.marketCap,
+          sector: r.sector,
+          reason: `TV ${scan.type}: ${r.changePercent > 0 ? '+' : ''}${r.changePercent.toFixed(1)}%, RSI ${r.rsi?.toFixed(0) ?? '?'}, RelVol ${r.relativeVolume?.toFixed(1) ?? '?'}x`,
+        }));
+        await insertCandidatesBatch(env.DB, candidates);
       }
 
-      // Generate signals from extreme TV scanner findings
-      const watchlist = new Set(getWatchlist(env));
+      // v3.5: Generate signals from ANY qualifying symbol (watchlist gate removed)
       for (const r of results) {
-        if (!watchlist.has(r.symbol)) continue;
-
         // Oversold with high relative volume = potential reversal
         if (scan.type === 'oversold' && r.rsi < 25 && r.relativeVolume > 2) {
           await pushEventDriven(
@@ -154,7 +175,7 @@ async function runTVScannerCapture(env: Env): Promise<void> {
         }
       }
 
-      logger.info(`TV Scanner ${scan.type}: ${results.length} results`);
+      logger.info(`TV Scanner ${scan.type}: ${results.length} results → candidates stored`);
     }
   } catch (err) {
     logger.error('TV Scanner capture error', err);

@@ -112,7 +112,7 @@ export default {
           'POST /api/telegram-alert-outcome',
           'GET /api/pnl-dashboard',
           'GET /api/dashboard-data',
-          'GET /api/trigger?job=morning|open|opening_range|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
+          'GET /api/trigger?job=morning|premarket|open|opening_range|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly',
           'GET /api/simulate',
         ],
       }, 404);

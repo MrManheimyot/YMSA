@@ -236,6 +236,7 @@ export type AlertChannel = 'telegram' | 'whatsapp' | 'email';
  */
 export type CronJobType =
   | 'MORNING_BRIEFING'
+  | 'PREMARKET_SCAN'
   | 'MARKET_OPEN_SCAN'
   | 'QUICK_SCAN_15MIN'
   | 'FULL_SCAN_HOURLY'
