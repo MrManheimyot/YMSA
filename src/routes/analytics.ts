@@ -152,5 +152,43 @@ export async function handleAnalyticsRoutes(
     return jsonResponse(stats);
   }
 
+  // ─── v3.7: Russell 1000 Universe Status ────────────
+  if (path === '/api/universe') {
+    const { RUSSELL_1000_COUNT, getSectorBreakdown, getRussell1000 } = await import('../universe/russell1000');
+    const universe = await getRussell1000(env.YMSA_CACHE);
+    const sectors = getSectorBreakdown();
+
+    // Get today's R1K coverage from D1
+    let r1kScanned = 0;
+    let r1kPromoted = 0;
+    let lastScanTime: string | null = null;
+    if (env.DB) {
+      const date = new Date().toISOString().split('T')[0];
+      const [scannedRes, promotedRes, lastRes] = await Promise.all([
+        env.DB.prepare(`SELECT COUNT(DISTINCT symbol) as cnt FROM scan_candidates WHERE scan_date = ? AND source IN ('R1K_UNIVERSE','R1K_RESCAN')`).bind(date).first(),
+        env.DB.prepare(`SELECT COUNT(DISTINCT symbol) as cnt FROM scan_candidates WHERE scan_date = ? AND source IN ('R1K_UNIVERSE','R1K_RESCAN') AND promoted = 1`).bind(date).first(),
+        env.DB.prepare(`SELECT MAX(discovered_at) as ts FROM scan_candidates WHERE scan_date = ? AND source IN ('R1K_UNIVERSE','R1K_RESCAN')`).bind(date).first(),
+      ]);
+      r1kScanned = (scannedRes as any)?.cnt ?? 0;
+      r1kPromoted = (promotedRes as any)?.cnt ?? 0;
+      lastScanTime = (lastRes as any)?.ts ? new Date((lastRes as any).ts).toISOString() : null;
+    }
+
+    return jsonResponse({
+      universe: {
+        name: 'Russell 1000',
+        staticCount: RUSSELL_1000_COUNT,
+        activeCount: universe.length,
+        sectors,
+      },
+      today: {
+        scanned: r1kScanned,
+        promoted: r1kPromoted,
+        coverage: universe.length > 0 ? ((r1kScanned / universe.length) * 100).toFixed(1) + '%' : '0%',
+        lastScan: lastScanTime,
+      },
+    });
+  }
+
   return null;
 }

@@ -112,6 +112,56 @@ export async function getSymbolData(symbol: string): Promise<TVScanResult | null
 }
 
 /**
+ * Bulk scan specific symbols — query up to 500 tickers per request.
+ * Uses TradingView's `symbols.tickers` mode (no filter, just data fetch).
+ * Returns quote + full technicals (RSI, EMA, volume, market cap, sector).
+ */
+export async function scanSymbolsBulk(symbols: string[]): Promise<TVScanResult[]> {
+  if (symbols.length === 0) return [];
+
+  // Build ticker list with exchange prefixes (TV will match the correct one)
+  const tickers = symbols.flatMap(s => [`NASDAQ:${s}`, `NYSE:${s}`, `AMEX:${s}`]);
+
+  const body = {
+    symbols: { tickers },
+    columns: SCAN_COLUMNS,
+  };
+
+  try {
+    const res = await fetch(`${BASE_URL}/america/scan`, {
+      method: 'POST',
+      headers: TV_HEADERS,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+
+    if (!res.ok) {
+      logger.error(`TV Bulk scan HTTP ${res.status} for ${symbols.length} symbols`);
+      return [];
+    }
+
+    const data = await res.json() as { data?: Array<{ s: string; d: number[] }> };
+    if (!data.data) return [];
+
+    // De-duplicate: same symbol from multiple exchanges → keep first (highest volume)
+    const seen = new Set<string>();
+    const results: TVScanResult[] = [];
+    for (const row of data.data) {
+      const parsed = parseScanRow(row);
+      if (!seen.has(parsed.symbol)) {
+        seen.add(parsed.symbol);
+        results.push(parsed);
+      }
+    }
+
+    return results;
+  } catch (err) {
+    logger.error(`TV Bulk scan error for ${symbols.length} symbols`, err);
+    return [];
+  }
+}
+
+/**
  * Fetch per-symbol news from TradingView's news mediator.
  * No auth required.
  */

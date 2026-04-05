@@ -27,6 +27,7 @@ import { runMTFScan, runSmartMoneyScan, runOptionsScan, runEventDrivenScan } fro
 import { runCryptoWhaleScan, runPolymarketScan, runCommodityScan, runPairsScan, runScraperScan } from './engine-scans';
 import { runSuperpowerScan, runSuperpowerQuick } from './superpower-scan';
 import { getPromotedCandidates, markCandidatesEvaluated, promoteTopCandidates } from '../db/queries/candidate-queries';
+import { rescanR1KMovers } from './r1k-scanner';
 
 export function getWatchlist(env: Env): string[] {
   return env.DEFAULT_WATCHLIST.split(',').map((s) => s.trim());
@@ -84,7 +85,8 @@ export async function runFullScan(env: Env, label: string): Promise<void> {
   beginCycle();
   await runRegimeScan(env);
 
-  // Phase 1: Discovery — superpower scan stores new candidates via TV scanner
+  // Phase 1: R1K re-scan top movers + superpower discovery
+  await rescanR1KMovers(env).catch(e => logger.warn('R1K re-scan failed', e));
   await runSuperpowerScan(env);
   await runScraperScan(env);
 

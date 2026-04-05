@@ -17,6 +17,7 @@ import * as tradingview from '../api/tradingview';
 import { fetchOversoldStocks, fetch52WeekHighs } from '../scrapers/finviz';
 import { sendTelegramMessage } from '../alert-router';
 import { insertCandidatesBatch, promoteTopCandidates, getCandidateStats, cleanOldCandidates } from '../db/queries/candidate-queries';
+import { scanRussell1000 } from './r1k-scanner';
 
 // ─── Main Entry Point ────────────────────────────────────────
 
@@ -31,28 +32,39 @@ export async function runPreMarketScan(env: Env): Promise<void> {
     return;
   }
 
-  // Phase 1: Universe discovery — broad market scanning
+  // Phase 1: Russell 1000 full universe scan (batched via TV bulk API)
+  const r1kResult = await scanRussell1000(env);
+
+  // Phase 2: Supplementary discovery — TV filter scans + FinViz
+  // These catch movers OUTSIDE R1K (small caps, recent IPOs, etc.)
   const [tvCount, finvizCount] = await Promise.all([
     discoverViaTradingView(env),
     discoverViaFinViz(env),
   ]);
 
-  // Phase 2: Promote top candidates (150 = enough for multi-engine coverage)
+  // Phase 3: Promotion already done inside scanRussell1000, but re-promote
+  // to include any TV/FinViz discoveries that outscored R1K candidates
   const promoted = await promoteTopCandidates(env.DB, 150);
 
-  // Phase 3: Clean old data (7+ days)
+  // Phase 4: Clean old data (7+ days)
   const cleaned = await cleanOldCandidates(env.DB, 7);
 
-  // Phase 4: Generate stats & send Telegram summary
+  // Phase 5: Generate stats & send Telegram summary
   const stats = await getCandidateStats(env.DB);
   const elapsed = ((Date.now() - start) / 1000).toFixed(1);
 
   const lines = [
-    '<b>🔭 PRE-MARKET UNIVERSE SCAN</b>',
+    '<b>🏛️ PRE-MARKET UNIVERSE SCAN (Russell 1000)</b>',
     `<i>${new Date().toISOString().split('T')[0]} — ${elapsed}s</i>`,
     '',
-    `<b>Discovery:</b>`,
-    `  📊 TradingView: ${tvCount} symbols across 6 scans`,
+    `<b>Russell 1000:</b>`,
+    `  📊 Universe: ${r1kResult.totalUniverse} symbols`,
+    `  ✅ Scanned: ${r1kResult.scanned} (${r1kResult.batchCount} batches, ${r1kResult.elapsed.toFixed(1)}s)`,
+    `  💾 Stored: ${r1kResult.stored} candidates`,
+    r1kResult.errors > 0 ? `  ⚠️ Batch errors: ${r1kResult.errors}` : '',
+    '',
+    `<b>Supplementary Discovery:</b>`,
+    `  📊 TradingView filters: ${tvCount} symbols across 6 scans`,
     `  📋 FinViz: ${finvizCount} symbols (oversold + 52W highs)`,
     `  🔢 Total unique: ${stats.total} candidates`,
     '',

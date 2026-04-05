@@ -33,7 +33,7 @@ export function getSystemStatus(env: Env): SystemStatus {
 
   return {
     health: 'ok',
-    version: '3.6.0',
+    version: '3.7.0',
     mode: hasAlpaca ? (paperMode ? 'PAPER TRADING' : 'LIVE TRADING') : 'SIGNALS ONLY',
     timestamp: new Date().toISOString(),
     engines: [
@@ -120,6 +120,7 @@ export function getSystemStatus(env: Env): SystemStatus {
       'GET /api/tv-snapshots',
       'GET /api/feed-health',
       'GET /api/candidates',
+      'GET /api/universe',
       'GET /api/trigger?job=morning|open|quick|pulse|hourly|midday|evening|overnight|weekly|retrain|monthly|premarket',
     ],
     riskLimits: {

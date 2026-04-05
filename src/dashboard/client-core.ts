@@ -13,7 +13,7 @@ function safeFetch(path) { return fetch(BASE + path, {credentials:'include'}).th
 
 // ─── Main Load ───────────────────────────────────
 async function loadDashboard() {
-  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats, dashData, rssFeed, socialSentiment, tvSnapshots, feedHealth, candidates] = await Promise.all([
+  const [status, portfolio, regime, signals, trades, riskEvents, positions, news, performance, dailyPnl, engineStats, dashData, rssFeed, socialSentiment, tvSnapshots, feedHealth, candidates, universe] = await Promise.all([
     safeFetch('/api/system-status'),
     safeFetch('/api/portfolio'),
     safeFetch('/api/regime'),
@@ -31,6 +31,7 @@ async function loadDashboard() {
     safeFetch('/api/tv-snapshots'),
     safeFetch('/api/feed-health'),
     safeFetch('/api/candidates'),
+    safeFetch('/api/universe'),
   ]);
 
   if (status) renderStatus(status, engineStats);
@@ -45,7 +46,7 @@ async function loadDashboard() {
   renderSentiment(socialSentiment);
   renderTVScanner(tvSnapshots);
   renderFeedHealth(feedHealth);
-  renderCandidates(candidates);
+  renderR1KUniverse(universe, candidates);
   renderSparkline(dailyPnl);
   renderWinLossTable(dashData?.tgAlerts, dashData?.tgStats);
   renderPnlDashboard(dashData?.pnlDash, dashData?.simTrades);
@@ -488,30 +489,60 @@ function renderFeedHealth(data) {
   }).join('');
 }
 
-// ─── v3.6: Universe Discovery ────────────────────
-function renderCandidates(data) {
-  if (!data) {
-    $('ud-total').textContent = '0';
-    $('ud-promoted').textContent = '0';
-    $('ud-evaluated').textContent = '0';
-    $('ud-rate').textContent = '—';
-    $('ud-sources').textContent = 'No data';
-    $('ud-top').textContent = 'No data';
-    return;
+// ─── v3.7: Russell 1000 Universe ─────────────────
+function renderR1KUniverse(universe, candidates) {
+  // Universe stats (from /api/universe)
+  if (universe && universe.universe) {
+    var u = universe.universe;
+    var t = universe.today || {};
+    $('r1k-universe').textContent = u.activeCount ? u.activeCount.toLocaleString() : u.staticCount ? u.staticCount.toLocaleString() : '—';
+    $('r1k-scanned').textContent = t.scanned ? t.scanned.toLocaleString() : '0';
+    $('r1k-coverage').textContent = t.coverage || '0%';
+    $('r1k-promoted-cnt').textContent = t.promoted ? t.promoted.toLocaleString() : '0';
+    $('r1k-last-scan').textContent = t.lastScan ? new Date(t.lastScan).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : 'No scan yet';
+
+    // Sector breakdown
+    var sectors = u.sectors || {};
+    var secHtml = Object.keys(sectors).sort(function(a, b) { return sectors[b] - sectors[a]; }).map(function(k) {
+      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span>' + k + '</span><span style="color:var(--c-primary)">' + sectors[k] + '</span></div>';
+    }).join('');
+    $('r1k-sectors').innerHTML = secHtml || 'No sectors';
+  } else {
+    $('r1k-universe').textContent = '—';
+    $('r1k-scanned').textContent = '0';
+    $('r1k-coverage').textContent = '—';
+    $('r1k-promoted-cnt').textContent = '0';
+    $('r1k-last-scan').textContent = '—';
+    $('r1k-sectors').textContent = 'Loading...';
   }
-  $('ud-total').textContent = data.total.toLocaleString();
-  $('ud-promoted').textContent = data.promoted.toLocaleString();
-  $('ud-evaluated').textContent = data.evaluated.toLocaleString();
-  var rate = data.total > 0 ? ((data.evaluated / data.total) * 100).toFixed(0) + '%' : '—';
-  $('ud-rate').textContent = rate;
-  var srcHtml = Object.keys(data.bySources || {}).sort(function(a, b) { return (data.bySources[b] || 0) - (data.bySources[a] || 0); }).map(function(k) {
-    return '<div style="display:flex;justify-content:space-between;padding:2px 0"><span>' + k + '</span><span style="color:var(--c-primary)">' + data.bySources[k] + '</span></div>';
-  }).join('');
-  $('ud-sources').innerHTML = srcHtml || 'No sources yet';
-  var topHtml = (data.topScorers || []).map(function(t) {
-    return '<div style="display:flex;justify-content:space-between;padding:2px 0"><span style="font-weight:500;color:var(--c-primary)">' + t.symbol + '</span><span>Score: ' + t.score + ' (' + t.source + ')</span></div>';
-  }).join('');
-  $('ud-top').innerHTML = topHtml || 'No scorers yet';
+
+  // Candidate pipeline (from /api/candidates)
+  if (candidates) {
+    $('r1k-discovered').textContent = candidates.total ? candidates.total.toLocaleString() : '0';
+    $('r1k-pipe-promoted').textContent = candidates.promoted ? candidates.promoted.toLocaleString() : '0';
+    $('r1k-evaluated').textContent = candidates.evaluated ? candidates.evaluated.toLocaleString() : '0';
+    var rate = candidates.total > 0 ? ((candidates.evaluated / candidates.total) * 100).toFixed(0) + '%' : '—';
+    $('r1k-rate').textContent = rate;
+
+    // Source breakdown
+    var srcHtml = Object.keys(candidates.bySources || {}).sort(function(a, b) { return (candidates.bySources[b] || 0) - (candidates.bySources[a] || 0); }).map(function(k) {
+      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span>' + k + '</span><span style="color:var(--c-primary)">' + candidates.bySources[k] + '</span></div>';
+    }).join('');
+    $('r1k-sources').innerHTML = srcHtml || 'No sources yet';
+
+    // Top scorers
+    var topHtml = (candidates.topScorers || []).map(function(t) {
+      return '<div style="display:flex;justify-content:space-between;padding:1px 0"><span style="font-weight:500;color:var(--c-primary)">' + t.symbol + '</span><span>Score ' + t.score + ' (' + t.source + ')</span></div>';
+    }).join('');
+    $('r1k-top').innerHTML = topHtml || 'No scorers yet';
+  } else {
+    $('r1k-discovered').textContent = '0';
+    $('r1k-pipe-promoted').textContent = '0';
+    $('r1k-evaluated').textContent = '0';
+    $('r1k-rate').textContent = '—';
+    $('r1k-sources').textContent = 'No data';
+    $('r1k-top').textContent = 'No data';
+  }
 }
 
 // ─── P&L Sparkline ───────────────────────────────

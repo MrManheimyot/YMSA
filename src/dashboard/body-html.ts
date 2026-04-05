@@ -2,12 +2,12 @@
 
 export const DASHBOARD_BODY = `
 <div class="top-bar">
-  <h1>📊 YMSA v3.6 — Trading Dashboard</h1>
+  <h1>📊 YMSA v3.7 — Trading Dashboard</h1>
   <div class="meta">
     <span id="last-update">Loading...</span>
     <div class="live-dot"></div>
     <span id="mode-badge" class="mode-badge signals">SIGNALS</span>
-    <span style="font-family:'Roboto Mono',monospace">v3.6.0</span>
+    <span style="font-family:'Roboto Mono',monospace">v3.7.0</span>
   </div>
 </div>
 
@@ -152,25 +152,42 @@ export const DASHBOARD_BODY = `
     </div>
   </div>
 
-  <!-- ═══ v3.6: UNIVERSE DISCOVERY ═══ -->
+  <!-- ═══ v3.7: RUSSELL 1000 UNIVERSE ═══ -->
   <div class="section">
-    <div class="section-hdr">🔭 Universe Discovery — Candidate Pipeline <span id="ud-version" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px">v3.6</span></div>
+    <div class="section-hdr">🏛️ Russell 1000 Universe <span id="r1k-badge" class="mono" style="color:var(--c-primary);font-size:12px;margin-left:4px">v3.7</span></div>
     <div class="card">
-      <div class="grid-4" id="ud-stats" style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-        <div class="stat-card"><div class="label">Discovered</div><div class="val" id="ud-total">—</div></div>
-        <div class="stat-card"><div class="label">Promoted</div><div class="val" id="ud-promoted">—</div></div>
-        <div class="stat-card"><div class="label">Evaluated</div><div class="val" id="ud-evaluated">—</div></div>
-        <div class="stat-card"><div class="label">Pipeline Rate</div><div class="val" id="ud-rate">—</div></div>
+      <!-- R1K Coverage Stats -->
+      <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:16px" id="r1k-stats">
+        <div class="stat-card"><div class="label">Universe</div><div class="val" id="r1k-universe">—</div></div>
+        <div class="stat-card"><div class="label">Scanned Today</div><div class="val" id="r1k-scanned">—</div></div>
+        <div class="stat-card"><div class="label">Coverage</div><div class="val" id="r1k-coverage">—</div></div>
+        <div class="stat-card"><div class="label">Promoted</div><div class="val" id="r1k-promoted-cnt">—</div></div>
+        <div class="stat-card"><div class="label">Last Scan</div><div class="val" id="r1k-last-scan" style="font-size:11px">—</div></div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <!-- Sector Breakdown -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px">
         <div>
-          <div style="font-weight:500;margin-bottom:8px;font-size:13px">📡 Sources Breakdown</div>
-          <div id="ud-sources" style="font-family:'Roboto Mono',monospace;font-size:12px;color:var(--c-on-surface-2)">Loading...</div>
+          <div style="font-weight:500;margin-bottom:8px;font-size:13px">📊 Sector Allocation</div>
+          <div id="r1k-sectors" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
         </div>
         <div>
-          <div style="font-weight:500;margin-bottom:8px;font-size:13px">🏆 Top Scorers Today</div>
-          <div id="ud-top" style="font-family:'Roboto Mono',monospace;font-size:12px;color:var(--c-on-surface-2)">Loading...</div>
+          <div style="font-weight:500;margin-bottom:8px;font-size:13px">📡 Source Breakdown</div>
+          <div id="r1k-sources" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
         </div>
+        <div>
+          <div style="font-weight:500;margin-bottom:8px;font-size:13px">🏆 Top Scorers</div>
+          <div id="r1k-top" style="font-family:'Roboto Mono',monospace;font-size:11px;color:var(--c-on-surface-2)">Loading...</div>
+        </div>
+      </div>
+    </div>
+    <!-- Candidate Pipeline -->
+    <div class="card" style="margin-top:8px">
+      <div style="font-weight:500;margin-bottom:8px;font-size:13px">🔄 Candidate Pipeline Flow</div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px" id="r1k-pipeline">
+        <div class="stat-card"><div class="label">Discovered</div><div class="val" id="r1k-discovered">—</div></div>
+        <div class="stat-card"><div class="label">Promoted</div><div class="val" id="r1k-pipe-promoted">—</div></div>
+        <div class="stat-card"><div class="label">Evaluated</div><div class="val" id="r1k-evaluated">—</div></div>
+        <div class="stat-card"><div class="label">Pipeline Rate</div><div class="val" id="r1k-rate">—</div></div>
       </div>
     </div>
   </div>
